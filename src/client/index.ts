@@ -7,6 +7,7 @@
  */
 
 import type { ComponentType } from 'react'
+import { ComposeButton } from './card.tsx'
 import { PICKER_DICTIONARIES, PICKER_LOCALE } from './locales.ts'
 import { InputPicker, SettingsView } from './pickers.tsx'
 import { VIDEO_PREVIEW_ID, VIDEO_TYPES, VideoBody } from './video.tsx'
@@ -19,6 +20,9 @@ export const CONFIG_KEY = 'dsh-media-gen#media-gen'
 
 /** Id of the picker among the chat input's left controls. */
 export const INPUT_PICKER_ID = 'dsh-media-gen.models'
+
+/** Id of the generation card's button among the chat input's left controls. */
+export const COMPOSE_ID = 'dsh-media-gen.compose'
 
 /** Locale namespace of the preview's labels. */
 const LOCALE = 'mediaGenVideo'
@@ -79,7 +83,7 @@ export async function runCommand(sessions: ClientContext['sessions'], sessionId:
   if (live === undefined) throw new Error('this session is not open yet')
   const result = await live.command(line)
   if (!result.ok) throw new Error(result.error.message)
-  if (!result.value.matched) throw new Error('the host offers no /media-model command')
+  if (!result.value.matched) throw new Error(`the host offers no ${line.split(' ')[0]} command`)
 }
 
 /**
@@ -113,4 +117,11 @@ export function apply(ctx: ClientContext): void {
     locale: PICKER_LOCALE,
     inject: (sessionId: string) => ({ command: (line: string) => runCommand(ctx.sessions, sessionId, line) }),
   }, InputPicker as ComponentType<never>)), 'media-gen: model picker')
+  ctx.effect(() => ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+    name: 'conversation.input.left',
+    id: COMPOSE_ID,
+    order: 99,
+    locale: PICKER_LOCALE,
+    inject: (sessionId: string) => ({ command: (line: string) => runCommand(ctx.sessions, sessionId, line) }),
+  }, ComposeButton as ComponentType<never>)), 'media-gen: generation card')
 }

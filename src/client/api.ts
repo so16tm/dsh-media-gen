@@ -7,10 +7,26 @@
 /** What a model generates. */
 export type MediaKind = 'image' | 'video'
 
+/** Values a model accepts, as the Host's listing reports them. */
+export interface ModelCapabilities {
+  aspectRatios?: string[]
+  resolutions?: string[]
+  durations?: number[]
+  audio?: boolean
+}
+
 /** One model in a picker. */
 export interface ModelOption {
   id: string
   name: string
+  options?: ModelCapabilities
+}
+
+/** Estimate of one generation. */
+export interface Estimate {
+  model: { id: string; name: string }
+  provider: string
+  cost: { min: number; max: number } | null
 }
 
 /** Models of one kind across the media-capable providers. */
@@ -52,6 +68,23 @@ export function loadModels(kind: MediaKind, refresh = false): Promise<ModelListi
 /** Read one session's choices. */
 export function loadSessionChoices(sessionId: string, signal?: AbortSignal): Promise<SessionChoices> {
   return getJson<SessionChoices>(`api/media-gen.session?sessionId=${encodeURIComponent(sessionId)}`, signal)
+}
+
+/** Estimate one generation; rejects with the Host's reason when the parameters are invalid. */
+export function loadEstimate(query: Record<string, string | undefined>, signal?: AbortSignal): Promise<Estimate> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, value)
+  return getJson<Estimate>(`api/media-gen.estimate?${params.toString()}`, signal)
+}
+
+/** Find one model across a listing's providers. */
+export function findModel(listing: ModelListing | undefined, id: string | undefined): ModelOption | undefined {
+  if (id === undefined) return undefined
+  for (const provider of listing?.providers ?? []) {
+    const found = provider.models.find(model => model.id === id)
+    if (found !== undefined) return found
+  }
+  return undefined
 }
 
 /** Flatten a listing into picker options, keeping a current id that the listing lacks. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { OpenRouterAdapter } from '../src/openrouter.ts'
 import { ProviderBridge } from '../src/provider-bridge.ts'
-import { handleModels, handleSession, MODELS_PATH, registerRoutes, SESSION_PATH, type FetchRegistry } from '../src/routes.ts'
+import { ESTIMATE_PATH, handleEstimate, handleModels, handleSession, MODELS_PATH, registerRoutes, SESSION_PATH, type FetchRegistry } from '../src/routes.ts'
 import { MediaService } from '../src/service.ts'
 import { MemorySessionModelStore } from '../src/session-models.ts'
 
@@ -11,7 +11,9 @@ function service(failing = false) {
     calls += 1
     if (failing) return Response.json({ error: { message: 'down' } }, { status: 500 })
     if (url.endsWith('/images/models')) return Response.json({ data: [{ id: 'g/img', name: 'G' }] })
-    if (url.endsWith('/videos/models')) return Response.json({ data: [{ id: 'v/vid', name: 'V' }] })
+    if (url.endsWith('/videos/models')) {
+      return Response.json({ data: [{ id: 'v/vid', name: 'V', supported_durations: [4, 8], supported_aspect_ratios: ['16:9'], generate_audio: false, pricing_skus: { video_second: '0.1' } }] })
+    }
     return new Response('{}', { status: 404 })
   }) as unknown as typeof fetch
   const bridge = new ProviderBridge({
@@ -33,7 +35,10 @@ describe('model route', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(await response.json()).toEqual({
       kind: 'video',
-      providers: [{ id: 'openrouter', name: 'OpenRouter', stale: false, models: [{ id: 'v/vid', name: 'V' }] }],
+      providers: [{
+        id: 'openrouter', name: 'OpenRouter', stale: false,
+        models: [{ id: 'v/vid', name: 'V', options: { durations: [4, 8], aspectRatios: ['16:9'], audio: false } }],
+      }],
       default: 'v/vid',
     })
     await handleModels(svc, url(`${MODELS_PATH}?kind=video`))
@@ -64,7 +69,22 @@ describe('session route', () => {
   it('registers both routes for GET', async () => {
     const routes: Parameters<FetchRegistry['register']>[0][] = []
     registerRoutes({ register: (route) => { routes.push(route); return async () => {} } }, service().svc, Promise.resolve(new MemorySessionModelStore()))
-    expect(routes.map(r => [r.path, r.methods])).toEqual([[MODELS_PATH, ['GET']], [SESSION_PATH, ['GET']]])
+    expect(routes.map(r => [r.path, r.methods])).toEqual([[MODELS_PATH, ['GET']], [SESSION_PATH, ['GET']], [ESTIMATE_PATH, ['GET']]])
     expect((await routes[1]!.fetch(url(`${SESSION_PATH}?sessionId=x`))).status).toBe(200)
+  })
+})
+
+describe('estimate route', () => {
+  it('estimates with the session choice and reports invalid parameters', async () => {
+    const store = new MemorySessionModelStore()
+    await store.set('s1', 'video', { model: 'v/vid' })
+    const { svc } = service()
+    expect(await (await handleEstimate(svc, store, url(`${ESTIMATE_PATH}?kind=video&sessionId=s1&duration=8&audio=off`))).json())
+      .toEqual({ model: { id: 'v/vid', name: 'V' }, provider: 'openrouter', cost: { min: 0.8, max: 0.8 } })
+    const bad = await handleEstimate(svc, store, url(`${ESTIMATE_PATH}?kind=video&sessionId=s1&duration=5`))
+    expect(bad.status).toBe(400)
+    expect((await bad.json()).error).toContain('4, 8')
+    expect((await handleEstimate(svc, store, url(`${ESTIMATE_PATH}?kind=video&sessionId=s1&audio=on`))).status).toBe(400)
+    expect((await handleEstimate(svc, store, url(`${ESTIMATE_PATH}?kind=image&count=x`))).status).toBe(400)
   })
 })

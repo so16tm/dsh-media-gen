@@ -18,7 +18,7 @@ beforeAll(() => {
     },
   }
   new Function('window', code)(window)
-  expect(required.every(name => ['react', 'react/jsx-runtime'].includes(name))).toBe(true)
+  expect(required.every(name => ['react', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'].includes(name))).toBe(true)
 }, 30_000)
 
 describe('client bundle', () => {
@@ -53,6 +53,7 @@ describe('client bundle', () => {
       { name: 'sidebar.right.tab.document', key: 'dsh-media-gen/video', id: undefined },
       { name: 'plugins.row.config', key: 'dsh-media-gen#media-gen', id: undefined },
       { name: 'conversation.input.left', key: undefined, id: 'dsh-media-gen.models' },
+      { name: 'conversation.input.left', key: undefined, id: 'dsh-media-gen.compose' },
     ])
     expect(Object.keys(dictionaries).sort()).toEqual(['mediaGen', 'mediaGenVideo'])
     expect(Object.keys(dictionaries.mediaGen?.ja ?? {}).sort()).toEqual(Object.keys(dictionaries.mediaGen?.en ?? {}).sort())
