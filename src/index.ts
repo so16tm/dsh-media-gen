@@ -25,6 +25,7 @@ import { MemoryPromptNoteStore, openPromptNoteStore, type PromptNoteStore } from
 import { MemoryMediaFileIndex, openMediaFileIndex, type MediaFileIndex } from './media-files.ts'
 import { registerRoutes, type FetchRegistry } from './routes.ts'
 import type { StorageDomainService } from './storage.ts'
+import { TurnGuard } from './turn-guard.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
 import { MediaService, type ImageArgs } from './service.ts'
@@ -338,11 +339,19 @@ export function apply(ctx: Context, config: Config): void {
     promptNotes,
   })
 
+  // A second generation in one turn is the agent acting on its own; it always asks.
+  const turnGuard = new TurnGuard()
+  ctx.on('agent/pre-step', async (step, next) => {
+    turnGuard.enter(step.agent, step.turn)
+    return await next()
+  })
+
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
     const decision = await next()
-    if (!config.requireApproval.get() || decision.kind !== 'allow') return decision
+    if (decision.kind !== 'allow') return decision
     if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return decision
-    if (await autoApproved(sessionIdOf(exec))) return decision
+    const repeat = turnGuard.repeat(exec.agent)
+    if (!repeat && (!config.requireApproval.get() || await autoApproved(sessionIdOf(exec)))) return decision
     const args = exec.arguments as { prompt?: unknown }
     if (typeof args?.prompt !== 'string') return decision
     const prompt = args.prompt.length > PROMPT_PREVIEW ? `${args.prompt.slice(0, PROMPT_PREVIEW)}…` : args.prompt
@@ -376,7 +385,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const inputLine = (lang: Parameters<typeof t>[0]) => inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`
     const full = (lang: Parameters<typeof t>[0]) =>
-      `${text(lang)}${inputLine(lang)}\n${t(lang, 'approval.prompt', { prompt })}\n${t(lang, 'approval.session')}`
+      `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${t(lang, 'approval.prompt', { prompt })}\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }
   })
 }
