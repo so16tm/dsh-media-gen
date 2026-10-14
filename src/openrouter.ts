@@ -1,10 +1,11 @@
 /**
- * OpenRouterAdapter: HTTP calls to OpenRouter's Image API. Model ids are never
- * hard-coded; every capability comes from `GET /images/models`.
+ * OpenRouterAdapter: HTTP calls to OpenRouter's Image and Video APIs. Model ids
+ * are never hard-coded; every capability comes from the model listings.
  * @module dsh-media-gen/src/openrouter
  */
 
 import { classifyHttpError, MediaError, redact } from './errors.ts'
+import { parseVideoJob, parseVideoModels, type VideoJobState, type VideoModel, type VideoRequest } from './video.ts'
 
 /** How one request parameter is constrained by a model. */
 export type ParameterSpec =
@@ -234,7 +235,59 @@ export class OpenRouterAdapter {
     return { images, costUsd: cost }
   }
 
+  /** List video models with their supported options and pricing SKUs. */
+  async listVideoModels(signal?: AbortSignal): Promise<VideoModel[]> {
+    return parseVideoModels(await this.request('GET', '/videos/models', undefined, signal))
+  }
+
+  /**
+   * Submit one video job. Sent once: a POST that may already be billed is
+   * never retried automatically.
+   */
+  async submitVideo(request: VideoRequest, signal?: AbortSignal): Promise<VideoJobState> {
+    const body = await this.request('POST', '/videos', { model: request.model, prompt: request.prompt, ...request.params }, signal)
+    const state = parseVideoJob(body)
+    if (state === undefined) throw new MediaError('INVALID_RESPONSE', 'the provider accepted the video request but returned no job id')
+    return state
+  }
+
+  /** Read the current state of one video job. */
+  async getVideoJob(jobId: string, signal?: AbortSignal): Promise<VideoJobState> {
+    const state = parseVideoJob(await this.request('GET', `/videos/${encodeURIComponent(jobId)}`, undefined, signal))
+    if (state === undefined) throw new MediaError('INVALID_RESPONSE', 'the provider returned no video job state')
+    return state
+  }
+
+  /**
+   * Download one output of a completed job. The content URL is not presigned,
+   * so it is fetched with the same credential as the API.
+   * @param maxBytes - largest accepted body.
+   */
+  async downloadVideo(jobId: string, index: number, maxBytes: number, signal?: AbortSignal): Promise<{ data: Uint8Array; contentType?: string }> {
+    const response = await this.send('GET', `/videos/${encodeURIComponent(jobId)}/content?index=${index}`, undefined, signal, '*/*')
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await response.body?.cancel()
+      throw new MediaError('INVALID_RESPONSE', `the video is ${declared} bytes, above the ${maxBytes}-byte limit`)
+    }
+    const data = new Uint8Array(await response.arrayBuffer())
+    if (data.byteLength > maxBytes) throw new MediaError('INVALID_RESPONSE', `the video is ${data.byteLength} bytes, above the ${maxBytes}-byte limit`)
+    const contentType = response.headers.get('content-type')
+    return { data, ...contentType === null ? {} : { contentType } }
+  }
+
   private async request(method: 'GET' | 'POST', path: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
+    const response = await this.send(method, path, payload, signal, 'application/json')
+    const text = await response.text()
+    try {
+      return JSON.parse(text) as unknown
+    } catch {
+      throw new MediaError('INVALID_RESPONSE', 'the provider returned a non-JSON response')
+    }
+  }
+
+  /** Send one request and classify transport and HTTP failures; the caller reads the body. */
+  private async send(method: 'GET' | 'POST', path: string, payload: unknown, signal: AbortSignal | undefined, accept: string): Promise<Response> {
     const timeout = AbortSignal.timeout(this.options.timeoutMs)
     const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     let response: Response
@@ -243,7 +296,7 @@ export class OpenRouterAdapter {
         method,
         headers: {
           Authorization: `Bearer ${this.options.apiKey}`,
-          Accept: 'application/json',
+          Accept: accept,
           ...payload === undefined ? {} : { 'Content-Type': 'application/json' },
         },
         ...payload === undefined ? {} : { body: JSON.stringify(payload) },
@@ -254,13 +307,8 @@ export class OpenRouterAdapter {
       if (timeout.aborted) throw new MediaError('TIMEOUT', `the provider did not answer within ${this.options.timeoutMs} ms`, { cause: error })
       throw new MediaError('PROVIDER_ERROR', `could not reach the provider: ${redact(String(error), [this.options.apiKey])}`, { cause: error })
     }
-    const text = await response.text()
-    if (!response.ok) throw classifyHttpError(response.status, redact(errorDetail(text), [this.options.apiKey]))
-    try {
-      return JSON.parse(text) as unknown
-    } catch {
-      throw new MediaError('INVALID_RESPONSE', 'the provider returned a non-JSON response')
-    }
+    if (!response.ok) throw classifyHttpError(response.status, redact(errorDetail(await response.text()), [this.options.apiKey]))
+    return response
   }
 }
 

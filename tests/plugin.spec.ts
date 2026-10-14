@@ -1,27 +1,60 @@
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, Config } from '../src/index.ts'
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
 
-function fakeContext() {
+interface FakeAgent {
+  status: string
+  session: { id: string }
+  followed: unknown[]
+  injected: unknown[]
+  followup(message: unknown): void
+  inject(message: unknown): void
+}
+
+function fakeAgent(id: string, status = 'idle'): FakeAgent {
+  const agent: FakeAgent = {
+    status, session: { id }, followed: [], injected: [],
+    followup: (m) => { agent.followed.push(m) },
+    inject: (m) => { agent.injected.push(m) },
+  }
+  return agent
+}
+
+function fakeContext(agents: FakeAgent[] = []) {
   const listeners = new Map<string, (...args: never[]) => unknown>()
-  const tools: { name: string }[] = []
+  const tools: { name: string; execute(args: unknown, exec: unknown): Promise<unknown> }[] = []
+  const disposers: (() => unknown)[] = []
+  const services: Record<string, unknown> = {
+    credentials: { resolve: async () => ({ value: 'sk-or-k' }) },
+    agents: { get: (id: string) => agents.find(a => a.session.id === id) },
+  }
   const ctx = {
     llm: {
       listProviders: () => [{ id: 'openrouter', name: 'OpenRouter' }],
       listConfigurableProviders: () => [],
     },
-    tools: { register: (tool: { name: string }) => { tools.push(tool) } },
+    tools: { register: (tool: (typeof tools)[number]) => { tools.push(tool) } },
     on: (name: string, fn: (...args: never[]) => unknown) => { listeners.set(name, fn) },
-    get: (name: string) => name === 'credentials' ? { resolve: async () => ({ value: 'sk-or-k' }) } : undefined,
+    get: (name: string) => services[name],
+    effect: (fn: () => () => unknown) => { disposers.push(fn()) },
+    logger: { warn: () => {} },
   }
-  return { ctx, listeners, tools }
+  return { ctx, listeners, tools, dispose: async () => { for (const d of disposers) await d() } }
 }
 
 function stubNetwork() {
   vi.stubGlobal('fetch', (async (url: string) => {
     if (url.endsWith('/images/models')) return Response.json({ data: [{ id: 'g/img', name: 'G Image', supported_parameters: {} }] })
     if (url.endsWith('/endpoints')) return Response.json({ data: { endpoints: [{ pricing: [{ billable: 'output_image', unit: 'image', cost_usd: 0.04 }] }] } })
+    if (url.endsWith('/videos/models')) {
+      return Response.json({ data: [{ id: 'v/vid', name: 'V Video', supported_durations: [4, 8], pricing_skus: { video_second: '0.1' } }] })
+    }
+    if (url.endsWith('/videos')) return Response.json({ id: 'job-9', status: 'pending' }, { status: 202 })
+    if (url.endsWith('/videos/job-9')) return Response.json({ id: 'job-9', status: 'failed', error: 'policy' })
     return Response.json({ data: [{ b64_json: Buffer.from(PNG).toString('base64') }] })
   }) as unknown as typeof fetch)
 }
@@ -29,10 +62,55 @@ function stubNetwork() {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('plugin apply', () => {
-  it('registers both tools', () => {
-    const { ctx, tools } = fakeContext()
+  it('registers the image and video tools', async () => {
+    const { ctx, tools, dispose } = fakeContext()
     apply(ctx as never, Config({}) as never)
-    expect(tools.map(t => t.name)).toEqual(['media_list_models', 'media_generate_image'])
+    expect(tools.map(t => t.name)).toEqual(['media_list_models', 'media_generate_image', 'media_generate_video', 'media_video_status'])
+    await dispose()
+  })
+
+  it('asks for video approval with a duration-based estimate in both languages', async () => {
+    stubNetwork()
+    const { ctx, listeners, dispose } = fakeContext()
+    apply(ctx as never, Config({ defaultVideoModel: 'v/vid' }) as never)
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<unknown>
+    const signal = new AbortController().signal
+    const exact = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave', duration: 8 }, signal }, async () => ({ kind: 'allow' })) as { displayReason: Record<string, string> }
+    expect(exact.displayReason.en).toContain('Generate a 8-second video with V Video (openrouter). Estimated cost: about 0.8 USD.')
+    expect(exact.displayReason.ja).toContain('V Video（openrouter）で 8 秒の動画を生成します。概算料金：約 0.8 USD')
+    const open = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal }, async () => ({ kind: 'allow' })) as { displayReason: Record<string, string> }
+    expect(open.displayReason.ja).toContain('モデル既定の長さ')
+    expect(open.displayReason.ja).toContain('約 0.4〜0.8 USD')
+    await dispose()
+  })
+
+  it('refuses a video longer than the configured limit before submitting', async () => {
+    stubNetwork()
+    const { ctx, tools, dispose } = fakeContext()
+    apply(ctx as never, Config({ defaultVideoModel: 'v/vid', maxVideoSeconds: 5 }) as never)
+    const generate = tools.find(t => t.name === 'media_generate_video')!
+    await expect(generate.execute({ prompt: 'x', duration: 8 }, { signal: new AbortController().signal })).rejects.toMatchObject({ code: 'LIMIT_EXCEEDED' })
+    await dispose()
+  })
+
+  it('submits a video job, reports its end to the session, and lists it', async () => {
+    stubNetwork()
+    const cwd = await mkdtemp(join(tmpdir(), 'media-'))
+    const agent = fakeAgent('s1')
+    const { ctx, tools, dispose } = fakeContext([agent])
+    apply(ctx as never, Config({ defaultVideoModel: 'v/vid', videoPollIntervalMs: 60_000 }) as never)
+    const exec = { signal: new AbortController().signal, agent: { session: { id: 's1', header: { cwd } } } }
+    const generate = tools.find(t => t.name === 'media_generate_video')!
+    const submitted = await generate.execute({ prompt: 'a wave', duration: 4 }, exec) as { id: string; status: string; dir: string; estimate: unknown }
+    expect(submitted).toMatchObject({ id: 'job-9', status: 'pending', dir: join(cwd, 'generated-media'), estimate: { min: 0.4, max: 0.4 } })
+    const status = tools.find(t => t.name === 'media_video_status')!
+    const checked = await status.execute({ job_id: 'job-9' }, exec) as { jobs: { status: string }[] }
+    expect(checked.jobs[0]?.status).toBe('failed')
+    expect(agent.followed).toHaveLength(1)
+    expect(JSON.stringify(agent.followed[0])).toContain('ended with status failed: policy')
+    const listed = await status.execute({}, exec) as { jobs: unknown[] }
+    expect(listed.jobs).toHaveLength(1)
+    await dispose()
   })
 
   it('asks for approval with a localized cost estimate', async () => {
