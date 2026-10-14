@@ -320,7 +320,7 @@ export function describeJob(record: VideoJobRecord): string {
     case 'completed':
       return record.files.length > 0
         ? `${head} finished. Saved:\n${record.files.map(f => `- ${f.path} (${f.mediaType}, ${f.bytes} bytes)`).join('\n')}\n${cost.trim()}`.trim()
-          + '\nTo hand a file to the user as a deliverable, call the present tool with its path.'
+          + '\nIn your reply, show the user the video by calling the present tool with its path; the chat plays it in the preview.'
         : `${head} finished, but saving the video has not succeeded yet${record.error === undefined ? '' : `: ${record.error}`}. It will be retried.`
     case 'stopped':
       return `${head}: ${record.error ?? 'watching stopped'}. This is not a cancellation; call media_video_status with this job_id to check it again.`

@@ -311,7 +311,8 @@ export function renderImageResult(value: ImageToolValue): ContentBlock[] {
     `Generated ${value.images.length} image(s) with ${value.model} (provider ${value.provider}).`,
     ...value.images.map(i => `- ${i.path} (${i.mediaType}, ${i.bytes} bytes)`),
     `Cost: ${value.costUsd === null ? 'not reported' : `${value.costUsd} USD`}.`,
-    'To hand a file to the user as a deliverable, call the present tool with its path.',
+    'In your reply, show each image with Markdown such as ![short description](<path>), using the path above, so it '
+      + 'appears in the reply itself; to hand a file over as a deliverable, call the present tool with its path.',
   ]
   if (value.attachmentFailures > 0) lines.push(`${value.attachmentFailures} image(s) could not be attached inline; the files are saved.`)
   const blocks: ContentBlock[] = [{ type: 'text', text: lines.join('\n') }]
