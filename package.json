@@ -33,8 +33,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "vitest run",
-    "prepare": "tsc -p tsconfig.build.json && node scripts/build-client.mjs"
+    "test": "vitest run"
   },
   "dsh": {
     "bundle": {
