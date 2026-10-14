@@ -42,6 +42,8 @@ export interface SessionChoices {
   defaults: { image: string | null; video: string | null }
   /** Models the chat input offers; an empty list offers every listed model. Absent from older Hosts. */
   chatModels?: { image: string[]; video: string[] }
+  /** Whether generation asks first, and whether this session allowed it without asking. Absent from older Hosts. */
+  approval?: { required: boolean; allowedInSession: boolean }
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {

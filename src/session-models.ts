@@ -22,6 +22,8 @@ export interface ModelChoice {
 export interface SessionModels {
   image?: ModelChoice
   video?: ModelChoice
+  /** The user allowed billed generation without asking again in this session. */
+  autoApprove?: boolean
   updatedAt: string
 }
 
@@ -43,6 +45,7 @@ export const sessionModelsSchema = {
     if (!isRecord(raw) || typeof raw.updatedAt !== 'string') throw new Error('session models must carry updatedAt')
     parseChoice(raw.image, 'image')
     parseChoice(raw.video, 'video')
+    if (raw.autoApprove !== undefined && typeof raw.autoApprove !== 'boolean') throw new Error('autoApprove must be a boolean')
     return raw as unknown as SessionModels
   },
 }
@@ -59,15 +62,25 @@ export interface SessionModelStore {
   get(sessionId: string): SessionModels | undefined
   /** Set or, with undefined, clear one kind's choice. */
   set(sessionId: string, kind: MediaKind, choice: ModelChoice | undefined): Promise<void>
+  /** Allow or stop billed generation without asking in one session. */
+  setAutoApprove(sessionId: string, on: boolean): Promise<void>
   readonly durable: boolean
   close?(): Promise<void>
 }
 
-function nextValue(current: SessionModels | undefined, kind: MediaKind, choice: ModelChoice | undefined, now: Date): SessionModels | undefined {
+type SessionChange = { kind: MediaKind; choice: ModelChoice | undefined } | { autoApprove: boolean }
+
+function nextValue(current: SessionModels | undefined, change: SessionChange, now: Date): SessionModels | undefined {
   const next: SessionModels = { ...current, updatedAt: now.toISOString() }
-  if (choice === undefined) delete next[kind]
-  else next[kind] = choice
-  return next.image === undefined && next.video === undefined ? undefined : next
+  if ('autoApprove' in change) {
+    if (change.autoApprove) next.autoApprove = true
+    else delete next.autoApprove
+  } else if (change.choice === undefined) {
+    delete next[change.kind]
+  } else {
+    next[change.kind] = change.choice
+  }
+  return next.image === undefined && next.video === undefined && next.autoApprove === undefined ? undefined : next
 }
 
 /** Process-local store used when DSH offers no storage domain. */
@@ -77,7 +90,13 @@ export class MemorySessionModelStore implements SessionModelStore {
   constructor(private readonly now: () => Date = () => new Date()) {}
   get(sessionId: string): SessionModels | undefined { return this.rows.get(sessionId) }
   async set(sessionId: string, kind: MediaKind, choice: ModelChoice | undefined): Promise<void> {
-    const next = nextValue(this.rows.get(sessionId), kind, choice, this.now())
+    this.apply(sessionId, { kind, choice })
+  }
+  async setAutoApprove(sessionId: string, on: boolean): Promise<void> {
+    this.apply(sessionId, { autoApprove: on })
+  }
+  private apply(sessionId: string, change: SessionChange): void {
+    const next = nextValue(this.rows.get(sessionId), change, this.now())
     if (next === undefined) this.rows.delete(sessionId)
     else this.rows.set(sessionId, next)
   }
@@ -87,14 +106,16 @@ export class MemorySessionModelStore implements SessionModelStore {
 export async function openSessionModelStore(service: StorageDomainService, attempts?: number, delayMs?: number): Promise<SessionModelStore> {
   const domain = await openDomain(service, SESSION_MODELS_DOMAIN, attempts, delayMs)
   const table = domain.table('models') as DomainTable<SessionModels>
+  const apply = async (sessionId: string, change: SessionChange) => {
+    const next = nextValue(table.get(sessionId), change, new Date())
+    if (next === undefined) await table.delete(sessionId)
+    else await table.put(sessionId, next)
+  }
   return {
     durable: true,
     get: sessionId => table.get(sessionId),
-    async set(sessionId, kind, choice) {
-      const next = nextValue(table.get(sessionId), kind, choice, new Date())
-      if (next === undefined) await table.delete(sessionId)
-      else await table.put(sessionId, next)
-    },
+    set: (sessionId, kind, choice) => apply(sessionId, { kind, choice }),
+    setAutoApprove: (sessionId, on) => apply(sessionId, { autoApprove: on }),
     close: () => domain.close(),
   }
 }
@@ -161,6 +182,27 @@ async function listIds(service: MediaService, kind: MediaKind, provider: ReturnT
   const options = signal === undefined ? {} : { signal }
   const snapshot = kind === 'image' ? await service.imageModels(provider, options) : await service.videoModels(provider, options)
   return snapshot.models.map(model => model.id)
+}
+
+/** Command that allows generation without asking in one session, without the slash. */
+export const MEDIA_APPROVAL_COMMAND = 'media-approval'
+
+/**
+ * Run `/media-approval on|off` for one session. Only the user can run a
+ * command, so the agent cannot lift its own approval.
+ */
+export async function runMediaApprovalCommand(
+  store: SessionModelStore, sessionId: string, rawInput: string, requireApproval: boolean,
+): Promise<CommandOutcome> {
+  const arg = rawInput.trim()
+  const state = () => store.get(sessionId)?.autoApprove === true
+    ? 'generation in this session runs without asking'
+    : 'each generation in this session asks first'
+  if (!requireApproval) return { kind: 'success', text: 'Approval is turned off in the plugin settings; nothing asks before generating.' }
+  if (arg === '') return { kind: 'success', text: `${state()} · usage: /${MEDIA_APPROVAL_COMMAND} on|off` }
+  if (arg !== 'on' && arg !== 'off') return { kind: 'error', text: `usage: /${MEDIA_APPROVAL_COMMAND} on|off` }
+  await store.setAutoApprove(sessionId, arg === 'on')
+  return { kind: 'success', text: arg === 'on' ? 'Generation in this session now runs without asking.' : 'Each generation in this session asks first again.' }
 }
 
 /**

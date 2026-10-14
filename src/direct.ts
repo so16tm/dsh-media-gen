@@ -121,6 +121,13 @@ export interface DirectDeps {
 /** Outcome of one command. */
 export type DirectOutcome = { kind: 'success'; text: string } | { kind: 'error'; text: string }
 
+/** Whether this command must stop at the estimate: approval is on, the line has no --yes, and the session has not allowed it. */
+async function mustConfirm(deps: DirectDeps, confirmed: boolean, caller: Caller): Promise<boolean> {
+  if (!deps.requireApproval() || confirmed) return false
+  const sessionId = sessionIdOf(caller)
+  return sessionId === undefined || (await deps.sessionModels).get(sessionId)?.autoApprove !== true
+}
+
 async function withChoice<A extends { model?: string | undefined; provider?: string | undefined }>(
   deps: DirectDeps, kind: MediaKind, args: A, caller: Caller,
 ): Promise<A> {
@@ -137,7 +144,7 @@ export async function runImageCommand(deps: DirectDeps, rawInput: string, caller
   try {
     const { args, confirmed } = parseImageCommand(rawInput)
     const plan = await deps.service.plan(await withChoice(deps, 'image', args, caller), caller.signal)
-    if (deps.requireApproval() && !confirmed) {
+    if (await mustConfirm(deps, confirmed, caller)) {
       const cost = await deps.service.estimate(plan, caller.signal)
       return {
         kind: 'success',
@@ -158,7 +165,7 @@ export async function runVideoCommand(deps: DirectDeps, rawInput: string, caller
   try {
     const { args, confirmed } = parseVideoCommand(rawInput)
     const plan = await deps.service.planVideo(await withChoice(deps, 'video', args, caller), caller.signal)
-    if (deps.requireApproval() && !confirmed) {
+    if (await mustConfirm(deps, confirmed, caller)) {
       const seconds = typeof plan.params.duration === 'number' ? `${plan.params.duration} s` : 'default length'
       return {
         kind: 'success',

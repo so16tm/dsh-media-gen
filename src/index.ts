@@ -15,7 +15,8 @@ import {
   describeJob, MemoryJobStore, openDomainStore, VideoJobWatcher, type JobStore, type VideoJobRecord,
 } from './jobs.ts'
 import {
-  MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaModelCommand, type SessionModelStore,
+  MEDIA_APPROVAL_COMMAND, MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaApprovalCommand,
+  runMediaModelCommand, type SessionModelStore,
 } from './session-models.ts'
 import {
   IMAGE_COMMAND, IMAGE_HINT, runImageCommand, runVideoCommand, VIDEO_COMMAND, VIDEO_HINT, type DirectDeps,
@@ -26,7 +27,7 @@ import type { StorageDomainService } from './storage.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
 import { MediaService, type ImageArgs } from './service.ts'
-import { registerTools, sessionArgs, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
+import { registerTools, sessionArgs, sessionIdOf, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
 import type { VideoArgs } from './video.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -250,6 +251,9 @@ export function apply(ctx: Context, config: Config): void {
   const direct: DirectDeps = {
     ctx, service, config: generateConfig, sessionModels, requireApproval: () => config.requireApproval.get(),
   }
+  // Whether the user allowed generation without asking in this session.
+  const autoApproved = async (sessionId: string | undefined): Promise<boolean> =>
+    sessionId !== undefined && (await sessionModels).get(sessionId)?.autoApprove === true
 
   // `/media-model` sets the session's models; `/image`, `/video`, and `/media-jobs` work without the agent.
   ;(ctx as unknown as { inject(deps: string[], fn: (c: { commands: CommandRegistry }) => void): void })
@@ -260,6 +264,13 @@ export function apply(ctx: Context, config: Config): void {
         input: { hint: 'image|video <model-id> [provider]' },
         handler: async ({ agent, rawInput, signal }) =>
           runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal),
+      })
+      c.commands.register({
+        name: MEDIA_APPROVAL_COMMAND,
+        description: 'Allow image and video generation without asking in this session, or ask again',
+        input: { hint: 'on|off' },
+        handler: async ({ agent, rawInput }) =>
+          runMediaApprovalCommand(await sessionModels, agent.session.id, rawInput, config.requireApproval.get()),
       })
       c.commands.register({
         name: IMAGE_COMMAND,
@@ -308,6 +319,7 @@ export function apply(ctx: Context, config: Config): void {
     const decision = await next()
     if (!config.requireApproval.get() || decision.kind !== 'allow') return decision
     if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return decision
+    if (await autoApproved(sessionIdOf(exec))) return decision
     const args = exec.arguments as { prompt?: unknown }
     if (typeof args?.prompt !== 'string') return decision
     const prompt = args.prompt.length > PROMPT_PREVIEW ? `${args.prompt.slice(0, PROMPT_PREVIEW)}…` : args.prompt
@@ -331,7 +343,7 @@ export function apply(ctx: Context, config: Config): void {
       // An invalid request fails in execute with its classified error, before any charge.
       return decision
     }
-    const full = (lang: Parameters<typeof t>[0]) => `${text(lang)}\n${t(lang, 'approval.prompt', { prompt })}`
+    const full = (lang: Parameters<typeof t>[0]) => `${text(lang)}\n${t(lang, 'approval.prompt', { prompt })}\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }
   })
 }

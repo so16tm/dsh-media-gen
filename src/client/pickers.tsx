@@ -251,12 +251,22 @@ export function InputControl(props: InputControlProps): ReactNode {
     // The configured subset keeps the menu short; every listed model stays one step away.
     return limited ? [...entries, { type: 'separator', id: 'more' }, { id: 'all', label: t('allModels') }] : entries
   }
+  // Only the user can lift the approval, from this menu or /media-approval; the agent has no way to.
+  const approvalItems = (): MenuEntry[] => {
+    const approval = choices?.approval
+    if (approval === undefined || !approval.required) return []
+    return [
+      { type: 'separator', id: 'approval' },
+      { id: 'approval', label: row(t('approval'), approval.allowedInSession ? t('approvalAllowed') : t('approvalAsk')) },
+    ]
+  }
   const items: MenuEntry[] = pane === 'root'
     ? [
         { id: 'compose', label: t('compose') },
         { type: 'separator', id: 'models' },
         { id: 'pane:image', label: row(t('image'), currentLabel('image')) },
         { id: 'pane:video', label: row(t('video'), currentLabel('video')) },
+        ...approvalItems(),
       ]
     : [
         { id: 'back', label: `‹ ${t(pane)}` },
@@ -273,6 +283,12 @@ export function InputControl(props: InputControlProps): ReactNode {
     } else if (id === 'back') {
       setPane('root')
       setShowAll(false)
+    } else if (id === 'approval') {
+      const on = choices?.approval?.allowedInSession !== true
+      close()
+      setError(undefined)
+      props.command(`/media-approval ${on ? 'on' : 'off'}`)
+        .then(() => { reload() }, (e: unknown) => { setError(e instanceof Error ? e.message : String(e)); reload() })
     } else if (id === 'all') {
       setShowAll(true)
     } else if (id.startsWith(MODEL_PREFIX) && pane !== 'root') {

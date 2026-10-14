@@ -118,8 +118,11 @@ export interface ChatModels {
  * @param service - configured defaults.
  * @param request - incoming request.
  * @param chatModels - models the chat input offers.
+ * @param requireApproval - whether the settings ask before each generation.
  */
-export function handleSession(store: SessionModelStore, service: MediaService, request: Request, chatModels?: ChatModels): Response {
+export function handleSession(
+  store: SessionModelStore, service: MediaService, request: Request, chatModels?: ChatModels, requireApproval = true,
+): Response {
   const sessionId = new URL(request.url).searchParams.get('sessionId')
   if (sessionId === null || sessionId.length === 0) return failure(400, 'sessionId is required')
   const choices = store.get(sessionId)
@@ -129,6 +132,7 @@ export function handleSession(store: SessionModelStore, service: MediaService, r
     video: choices?.video ?? null,
     defaults: { image: settings.defaultImageModel ?? null, video: settings.defaultVideoModel ?? null },
     chatModels: { image: [...chatModels?.image ?? []], video: [...chatModels?.video ?? []] },
+    approval: { required: requireApproval, allowedInSession: choices?.autoApprove === true },
   }, { headers: NO_STORE })
 }
 
@@ -177,9 +181,13 @@ export async function handleEstimate(service: MediaService, store: SessionModelS
  * @param fetch - DSH's connection fetch registry.
  * @param service - shared media service.
  * @param store - session choices, ready once their storage opened.
+ * @param chatModels - models the chat input offers.
+ * @param requireApproval - whether the settings ask before each generation.
  */
-export function registerRoutes(fetch: FetchRegistry, service: MediaService, store: Promise<SessionModelStore>, chatModels?: () => ChatModels): void {
+export function registerRoutes(
+  fetch: FetchRegistry, service: MediaService, store: Promise<SessionModelStore>, chatModels?: () => ChatModels, requireApproval?: () => boolean,
+): void {
   fetch.register({ path: MODELS_PATH, methods: ['GET'], requestBody: 'buffered', fetch: request => handleModels(service, request) })
-  fetch.register({ path: SESSION_PATH, methods: ['GET'], requestBody: 'buffered', fetch: async request => handleSession(await store, service, request, chatModels?.()) })
+  fetch.register({ path: SESSION_PATH, methods: ['GET'], requestBody: 'buffered', fetch: async request => handleSession(await store, service, request, chatModels?.(), requireApproval?.() ?? true) })
   fetch.register({ path: ESTIMATE_PATH, methods: ['GET'], requestBody: 'buffered', fetch: async request => handleEstimate(service, await store, request) })
 }

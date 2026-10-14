@@ -123,7 +123,7 @@ describe('plugin apply', () => {
     apply(ctx as never, Config({}) as never)
     const run = (name: string, rawInput: string) =>
       commands.find(c => c.name === name)!.handler!({ agent, rawInput, signal: new AbortController().signal })
-    expect(commands.map(c => c.name)).toEqual(['media-model', 'image', 'video', 'media-jobs'])
+    expect(commands.map(c => c.name)).toEqual(['media-model', 'media-approval', 'image', 'video', 'media-jobs'])
     const preview = await run('image', '--model g/img a red fox')
     expect(preview).toMatchObject({ kind: 'success' })
     expect(preview.text).toContain('about 0.04 USD')
@@ -244,6 +244,31 @@ describe('plugin apply', () => {
     expect(decision.kind).toBe('ask')
     expect(decision.displayReason.en).toContain('Estimated cost: about 0.04 USD')
     expect(decision.displayReason.ja).toContain('概算料金：約 0.04 USD')
+    expect(decision.displayReason.ja).toContain('/media-approval on')
+  })
+
+  it('stops asking in a session the user allowed with /media-approval, and only there', async () => {
+    stubNetwork()
+    const cwd = await mkdtemp(join(tmpdir(), 'media-'))
+    const agent = Object.assign(fakeAgent('s1'), { session: { id: 's1', header: { cwd } } })
+    const { ctx, listeners, commands } = fakeContext([agent])
+    apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
+    const signal = new AbortController().signal
+    const run = (name: string, rawInput: string) => commands.find(c => c.name === name)!.handler!({ agent, rawInput, signal })
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string }>
+    const call = (session: string) => hook(
+      { name: 'media_generate_image', arguments: { prompt: 'a cat' }, signal, agent: { session: { id: session } } },
+      async () => ({ kind: 'allow' }),
+    )
+    expect((await call('s1')).kind).toBe('ask')
+    expect(await run('media-approval', 'on')).toMatchObject({ kind: 'success' })
+    expect((await call('s1')).kind).toBe('allow')
+    expect((await call('s2')).kind).toBe('ask')
+    // A direct command in the allowed session generates without --yes.
+    expect((await run('image', 'a red fox')).text).toMatch(/^Saved 1 image/u)
+    expect(await run('media-approval', 'off')).toMatchObject({ kind: 'success' })
+    expect((await call('s1')).kind).toBe('ask')
+    expect(await run('media-approval', 'maybe')).toMatchObject({ kind: 'error' })
   })
 
   it('leaves other tools, denials, and disabled approval untouched', async () => {
