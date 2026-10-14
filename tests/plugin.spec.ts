@@ -247,7 +247,7 @@ describe('plugin apply', () => {
     apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
     const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<unknown>
     const decision = await hook(
-      { name: 'media_generate_image', arguments: { prompt: 'a cat' }, signal: new AbortController().signal },
+      { name: 'media_generate_image', arguments: { prompts: ['a cat'] }, signal: new AbortController().signal },
       async () => ({ kind: 'allow' }),
     ) as { kind: string; displayReason: Record<string, string> }
     expect(decision.kind).toBe('ask')
@@ -266,7 +266,7 @@ describe('plugin apply', () => {
     const run = (name: string, rawInput: string) => commands.find(c => c.name === name)!.handler!({ agent, rawInput, signal })
     const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string }>
     const call = (session: string) => hook(
-      { name: 'media_generate_image', arguments: { prompt: 'a cat' }, signal, agent: { session: { id: session } } },
+      { name: 'media_generate_image', arguments: { prompts: ['a cat'] }, signal, agent: { session: { id: session } } },
       async () => ({ kind: 'allow' }),
     )
     expect((await call('s1')).kind).toBe('ask')
@@ -285,7 +285,7 @@ describe('plugin apply', () => {
     apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
     const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<unknown>
     const signal = new AbortController().signal
-    expect(await hook({ name: 'media_generate_image', arguments: { prompt: 'x' }, signal }, async () => ({ kind: 'allow' }))).toEqual({ kind: 'allow' })
+    expect(await hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal }, async () => ({ kind: 'allow' }))).toEqual({ kind: 'allow' })
     expect(await hook({ name: 'bash', arguments: {}, signal }, async () => ({ kind: 'deny', reason: 'no' }))).toEqual({ kind: 'deny', reason: 'no' })
   })
 })

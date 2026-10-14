@@ -156,11 +156,10 @@ export class MediaService {
     // A prompt that lists several images yields one collage per request, so every prompt must describe one image.
     const listing = [args.prompt, ...variations].findIndex(p => VARIANT_LIST.test(p))
     if (listing >= 0 && (count > 1 || variations.length > 0)) {
-      throw new MediaError('INVALID_REQUEST', `${listing === 0 ? 'prompt' : `variations[${listing - 1}]`} lists several different `
-        + 'images, and each request then returns one collage. Rewrite it so that each prompt describes exactly one image: '
-        + 'prompt is image 1 only (for example only the first pose, with no mention of other poses or of how many images), and '
-        + 'variations holds images 2 to N, one complete prompt each, so N images means N - 1 variations. Set count to 1. '
-        + 'Do not add images beyond what the user asked for.')
+      throw new MediaError('INVALID_REQUEST', `prompt ${listing + 1} describes several different images, and each request `
+        + 'then returns one collage. Nothing was generated. Send one prompt per image instead: each describes exactly one '
+        + 'image (one pose, angle, or scene) and never mentions the others or how many there are, so N images means N '
+        + 'prompts. Do not add images beyond what the user asked for.')
     }
     const inputs = inputPaths(args.input_images, 'input_images')
     if (inputs.length > 0) {

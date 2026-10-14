@@ -29,7 +29,7 @@ import { TurnGuard } from './turn-guard.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
 import { MediaService, type ImageArgs } from './service.ts'
-import { registerTools, sessionArgs, sessionIdOf, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
+import { imageToolArgs, registerTools, sessionArgs, sessionIdOf, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
 import type { VideoArgs } from './video.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -352,7 +352,10 @@ export function apply(ctx: Context, config: Config): void {
     if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return decision
     const repeat = turnGuard.repeat(exec.agent)
     if (!repeat && (!config.requireApproval.get() || await autoApproved(sessionIdOf(exec)))) return decision
-    const args = exec.arguments as { prompt?: unknown }
+    const raw = exec.arguments as { prompt?: unknown; prompts?: unknown }
+    const args = exec.name === TOOL_GENERATE_IMAGE
+      ? Array.isArray(raw?.prompts) && raw.prompts.every(p => typeof p === 'string') ? imageToolArgs(raw as { prompts: string[] }) : undefined
+      : raw
     if (typeof args?.prompt !== 'string') return decision
     const preview = (text: string) => (text.length > PROMPT_PREVIEW ? `${text.slice(0, PROMPT_PREVIEW)}…` : text)
     const prompt = preview(args.prompt)

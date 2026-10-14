@@ -52,12 +52,16 @@ export function videoJobOf(meta: unknown, text: string): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : jobIdOf(text)
 }
 
-/** The prompt argument of a raw tool-call argument string. */
+/** The prompt argument of a raw tool-call argument string; an image call's prompts, one per line. */
 export function promptOf(argsRaw: string | undefined): string | undefined {
   if (argsRaw === undefined) return undefined
   try {
-    const prompt = (JSON.parse(argsRaw) as { prompt?: unknown }).prompt
-    return typeof prompt === 'string' ? prompt : undefined
+    const args = JSON.parse(argsRaw) as { prompt?: unknown; prompts?: unknown }
+    if (Array.isArray(args.prompts)) {
+      const prompts = args.prompts.filter((p): p is string => typeof p === 'string')
+      return prompts.length === 0 ? undefined : prompts.length === 1 ? prompts[0] : prompts.map((p, i) => `${i + 1}. ${p}`).join('\n')
+    }
+    return typeof args.prompt === 'string' ? args.prompt : undefined
   } catch {
     return undefined
   }

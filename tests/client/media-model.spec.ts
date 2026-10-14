@@ -19,4 +19,11 @@ describe('media view model', () => {
     expect(promptOf('{"prompt":"a fox"}')).toBe('a fox')
     expect(promptOf('{"prompt":')).toBeUndefined()
   })
+
+  it('reads an image call\'s prompts', async () => {
+    const { promptOf } = await import('../../src/client/media-model.ts')
+    expect(promptOf(JSON.stringify({ prompts: ['a', 'b'] }))).toBe('1. a\n2. b')
+    expect(promptOf(JSON.stringify({ prompts: ['a'] }))).toBe('a')
+    expect(promptOf(JSON.stringify({ prompt: 'v' }))).toBe('v')
+  })
 })

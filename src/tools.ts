@@ -14,7 +14,7 @@ import { describeJob, type VideoJobRecord } from './jobs.ts'
 import type { ParameterSpec } from './openrouter.ts'
 import { MAX_NOTE_CHARS, type PromptNoteStore } from './prompt-notes.ts'
 import { withSessionModel, type MediaKind, type SessionModelStore } from './session-models.ts'
-import type { MediaService } from './service.ts'
+import type { ImageArgs, MediaService } from './service.ts'
 
 /** Wire names of the tools; stable across languages. */
 export const TOOL_LIST_MODELS = 'media_list_models'
@@ -38,11 +38,8 @@ const MODEL_GUIDE = 'Omit model to use the model the user selected; the selectio
 
 /** When details are missing; shared by both generation tools. */
 /** Generation is billed, so a finished call is never followed by another on the agent's own judgment. */
-const ONCE_GUIDE = 'Make only the generations the user asked for, in one call. When they ask for several images that differ '
-  + '(for example three poses), write prompt for the first image only and put each other image\'s complete prompt in '
-  + 'variations; never list the variants in one prompt, which yields a collage. Example for three poses of a white cat: '
-  + 'prompt "a white cat sitting, ...", variations ["a white cat stretching, ...", "a white cat jumping, ..."], no count. '
-  + 'Use count only for copies of one prompt. '
+const ONCE_GUIDE = 'Make only the generations the user asked for, in one call: prompts holds one complete prompt per image, '
+  + 'so three images means three prompts, each describing one image only. '
   + 'Once you have what you need, call the tool in the same turn instead of announcing it and stopping. Never make more than asked. Once '
   + 'those return, do not call again on your own to retry, improve, fix, or vary the results, even if they miss the request: '
   + 'show them, say what differs, and let the user decide.'
@@ -50,6 +47,17 @@ const ONCE_GUIDE = 'Make only the generations the user asked for, in one call. W
 const ASK_GUIDE = 'Ask only when the request leaves out something essential that you cannot reasonably choose (%s), '
   + 'and then ask once, all in one question, with ask_user_question when available. Details the user left open, such as '
   + 'which poses or a fitting style, are yours to choose: choose them and say what you chose.'
+
+/**
+ * The image tool's arguments as a plan request: the first prompt, then one
+ * variation per further prompt. The tool has no count, so every image has
+ * its own prompt.
+ */
+export function imageToolArgs<A extends { prompts?: readonly string[] | undefined }>(args: A): Omit<A, 'prompts'> & ImageArgs {
+  const { prompts, ...rest } = args
+  const list = (prompts ?? []).map(p => p.trim()).filter(p => p.length > 0)
+  return { ...rest, prompt: list[0] ?? '', variations: list.slice(1) } as Omit<A, 'prompts'> & ImageArgs
+}
 
 /** Most jobs one status listing shows. */
 const STATUS_LIMIT = 20
@@ -192,16 +200,14 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'aspect_ratio/resolution values a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' ' + ONCE_GUIDE + ' '
       + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
     parameters: {
-      prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
+      prompts: {
+        type: 'array', items: { type: 'string' }, required: true,
+        description: 'One prompt per image, written for the model as described above; the call makes exactly this many images, '
+          + 'one request each. Each prompt describes a single image (one pose, angle, or scene) and never the others: a prompt '
+          + 'describing several images is refused when more than one image is asked for.',
+      },
       model: { type: 'string', description: 'Image model id; omit to use the model the user selected. A model chosen for this session in the chat input overrides it.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
-      count: { type: 'integer', description: 'Copies of this same prompt (default 1). For images that differ, use variations instead.' },
-      variations: {
-        type: 'array', items: { type: 'string' },
-        description: 'For N differing images (another pose, angle, or scene): N - 1 complete prompts for images 2 to N, one '
-          + 'image each. prompt then describes image 1 only, never the others or how many there are. The call makes '
-          + '1 + variations images, one request each.',
-      },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
       resolution: { type: 'string', description: 'Resolution tier such as 1K or 2K, if the model accepts it.' },
       seed: { type: 'integer', description: 'Seed for reproducible output, if the model accepts it.' },
@@ -224,8 +230,9 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     },
     timeoutMs: 600_000,
     async execute(args, exec) {
-      const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', args, exec), exec.signal)
-      return await runImagePlan(ctx, service, config, plan, args.prompt, exec) as never
+      const image = imageToolArgs(args)
+      const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', image, exec), exec.signal)
+      return await runImagePlan(ctx, service, config, plan, image.prompt, exec) as never
     },
   }))
 
