@@ -1,7 +1,7 @@
 {
   "name": "dsh-media-gen",
   "description": "Image and video generation for DeepSeek Harness, reusing the providers configured in DSH",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

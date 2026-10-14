@@ -1,31 +1,43 @@
 /**
- * TurnGuard: notices a second generation inside one agent turn. The agent
+ * TurnGuard: notices a second generation inside one user request. The agent
  * sometimes calls a generation tool again on its own to retry or vary a
- * result; such a call is billed, so it is always put to the user, even where
- * the conversation allows generation without asking.
+ * result, also in a turn that a notice rather than the user started (a
+ * subagent's report, a finished video job); such a call is billed, so it is
+ * always put to the user, even where the conversation allows generation
+ * without asking.
  * @module dsh-media-gen/src/turn-guard
  */
 
-/** Per-agent turn tracking; agents are held weakly. */
+/** The part of a step's message the guard reads. */
+export interface StepMessage {
+  readonly source?: { readonly kind?: unknown } | undefined
+}
+
+/** Per-agent request tracking; agents are held weakly. */
 export class TurnGuard {
-  private readonly turns = new WeakMap<object, number>()
+  private readonly requests = new WeakMap<object, number>()
   private readonly generated = new WeakMap<object, number>()
 
-  /** Record the turn an agent's step belongs to. */
-  enter(agent: object | undefined, turn: number): void {
-    if (agent !== undefined) this.turns.set(agent, turn)
+  /**
+   * Record the messages that enter an agent's step. A message the user sent
+   * starts a new request; notices and tool results continue the current one.
+   */
+  enter(agent: object | undefined, messages: readonly StepMessage[]): void {
+    if (agent === undefined || !messages.some(m => m.source?.kind === 'user')) return
+    this.requests.set(agent, (this.requests.get(agent) ?? 0) + 1)
   }
 
   /**
    * Record one generation call and tell whether the agent already made one
-   * in its current turn. Unknown agents or turns never count as a repeat.
+   * since the user last wrote. Agents whose user message was never seen
+   * never count as a repeat.
    */
   repeat(agent: object | undefined): boolean {
     if (agent === undefined) return false
-    const turn = this.turns.get(agent)
-    if (turn === undefined) return false
-    const repeated = this.generated.get(agent) === turn
-    this.generated.set(agent, turn)
+    const request = this.requests.get(agent)
+    if (request === undefined) return false
+    const repeated = this.generated.get(agent) === request
+    this.generated.set(agent, request)
     return repeated
   }
 }

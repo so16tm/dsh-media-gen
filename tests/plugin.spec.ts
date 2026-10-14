@@ -370,4 +370,39 @@ describe('plugin apply', () => {
     const decision = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
     expect(decision.reason).toContain('Generate a 4-second video')
   })
+  it('hides and refuses generation in a subagent, whose approval questions never reach the user', async () => {
+    stubNetwork()
+    const { ctx, listeners } = fakeContext()
+    apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
+    const created = listeners.get('agent/created') as unknown as (payload: unknown) => unknown
+    const restricted: unknown[] = []
+    const child = { session: { id: 'c1', header: { origin: 'subagent' } }, ctx: { tools: { restrict: (f: unknown) => { restricted.push(f) } } } }
+    const root = { session: { id: 'r1', header: {} }, ctx: { tools: { restrict: (f: unknown) => { restricted.push(f) } } } }
+    created({ agent: child })
+    created({ agent: root })
+    expect(restricted).toEqual([{ deny: ['media_generate_image', 'media_generate_video', 'media_set_prompt_notes'] }])
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
+    const signal = new AbortController().signal
+    const denied = await hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal, agent: child }, async () => ({ kind: 'allow' }))
+    expect(denied.kind).toBe('deny')
+    expect(denied.reason).toContain('not available to a subagent')
+    expect(await hook({ name: 'media_list_models', arguments: {}, signal, agent: child }, async () => ({ kind: 'allow' }))).toEqual({ kind: 'allow' })
+  })
+
+  it('asks for a generation in a turn a notice started after an earlier generation', async () => {
+    stubNetwork()
+    const { ctx, listeners } = fakeContext()
+    apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
+    const step = listeners.get('agent/pre-step') as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string }>
+    const signal = new AbortController().signal
+    const agent = { session: { id: 's1', header: {} } }
+    const call = () => hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal, agent }, async () => ({ kind: 'allow' }))
+    await step({ agent, turn: 1, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
+    expect((await call()).kind).toBe('allow')
+    await step({ agent, turn: 2, messages: [{ source: { kind: 'agent-message' } }] }, async () => ({}))
+    expect((await call()).kind).toBe('ask')
+    await step({ agent, turn: 3, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
+    expect((await call()).kind).toBe('allow')
+  })
 })

@@ -1,19 +1,31 @@
 /**
- * TurnGuard: notices a second generation inside one agent turn. The agent
+ * TurnGuard: notices a second generation inside one user request. The agent
  * sometimes calls a generation tool again on its own to retry or vary a
- * result; such a call is billed, so it is always put to the user, even where
- * the conversation allows generation without asking.
+ * result, also in a turn that a notice rather than the user started (a
+ * subagent's report, a finished video job); such a call is billed, so it is
+ * always put to the user, even where the conversation allows generation
+ * without asking.
  * @module dsh-media-gen/src/turn-guard
  */
-/** Per-agent turn tracking; agents are held weakly. */
+/** The part of a step's message the guard reads. */
+export interface StepMessage {
+    readonly source?: {
+        readonly kind?: unknown;
+    } | undefined;
+}
+/** Per-agent request tracking; agents are held weakly. */
 export declare class TurnGuard {
-    private readonly turns;
+    private readonly requests;
     private readonly generated;
-    /** Record the turn an agent's step belongs to. */
-    enter(agent: object | undefined, turn: number): void;
+    /**
+     * Record the messages that enter an agent's step. A message the user sent
+     * starts a new request; notices and tool results continue the current one.
+     */
+    enter(agent: object | undefined, messages: readonly StepMessage[]): void;
     /**
      * Record one generation call and tell whether the agent already made one
-     * in its current turn. Unknown agents or turns never count as a repeat.
+     * since the user last wrote. Agents whose user message was never seen
+     * never count as a repeat.
      */
     repeat(agent: object | undefined): boolean;
 }
