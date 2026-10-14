@@ -238,12 +238,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     async execute(args, exec) {
       const image = imageToolArgs(args)
       const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', image, exec), exec.signal)
-      const value = await runImagePlan(ctx, service, config, plan, image.prompt, exec)
-      // The chat already shows the images, their cost, and the reuse buttons, so the turn ends here:
-      // the agent gets no further step in which to re-ask, open the files, or generate again.
-      // A partial failure leaves the turn open so the agent can tell the user.
-      if (value.failed === undefined) (exec as { concludeTurn?: () => void }).concludeTurn?.()
-      return value as never
+      return await runImagePlan(ctx, service, config, plan, image.prompt, exec) as never
     },
   }))
 

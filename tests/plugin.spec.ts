@@ -336,15 +336,8 @@ describe('plugin apply', () => {
     const { ctx, tools, dispose } = fakeContext()
     apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
     const generate = tools.find(t => t.name === 'media_generate_image')!
-    const concludeTurn = vi.fn()
-    const exec = { signal: new AbortController().signal, agent: { session: { id: 's1', header: { cwd } } }, concludeTurn }
+    const exec = { signal: new AbortController().signal, agent: { session: { id: 's1', header: { cwd } } } }
     const value = await generate.execute({ prompts: ['a cat sitting', 'a cat jumping'] }, exec) as { images: unknown[]; failed?: string }
-    // The agent still has a step to tell the user about the failure.
-    expect(concludeTurn).not.toHaveBeenCalled()
-    generated = 0
-    const whole = await generate.execute({ prompts: ['a cat sitting'] }, exec) as { images: unknown[] }
-    expect(whole.images).toHaveLength(1)
-    expect(concludeTurn).toHaveBeenCalledOnce()
     expect(value.images).toHaveLength(1)
     expect(value.failed).toContain('image 2 of 2 failed')
     expect(value.failed).toContain('may still have charged')
