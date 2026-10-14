@@ -30,6 +30,10 @@ const PROMPT_GUIDE = 'Write the prompt for the chosen model from what the user w
   + 'the user\'s wording. Keep text the user wants shown in the output exactly as given. The user sees the final prompt '
   + 'before anything is billed.'
 
+/** Which model to use; shared by both generation tools. */
+const MODEL_GUIDE = 'Use the model the user selected: omit model, or pass the id media_list_models reports as selected. '
+  + 'Pass another model only when the user names one in this conversation; never switch on your own to a model you prefer.'
+
 /** When details are missing; shared by both generation tools. */
 const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
   + '(%s), ask the user once before generating, with ask_user_question when available, instead of guessing.'
@@ -79,8 +83,9 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
   ctx.tools.register(defineTool({
     name: TOOL_LIST_MODELS,
     description: 'List the image or video generation models available through the providers configured in DeepSeek Harness, '
-      + 'with the parameters each model accepts and any promptNotes saved for it. Call this before media_generate_image or '
-      + 'media_generate_video to learn how to write the prompt for the model.',
+      + 'with the parameters each model accepts and any promptNotes saved for it, and report which model the user selected '
+      + '(selected.model, chosen for this session or in the settings). Call this before media_generate_image or '
+      + 'media_generate_video to learn how to write the prompt for the selected model.',
     parameters: {
       kind: { type: 'string', enum: ['image', 'video'], description: 'Which models to list (default image).' },
       provider: { type: 'string', description: 'DSH provider id; omit to list every media-capable provider.' },
@@ -96,6 +101,14 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       if (providers.length === 0) service.bridge.pick()
       const options = { refresh: args.refresh === true, signal: exec.signal }
       const settings = service.settings()
+      const kind: MediaKind = args.kind === 'video' ? 'video' : 'image'
+      const sessionId = sessionIdOf(exec)
+      const chosen = sessionId === undefined ? undefined : (await config.sessionModels).get(sessionId)?.[kind]
+      const fallback = kind === 'image' ? settings.defaultImageModel : settings.defaultVideoModel
+      // The user's selection, so the agent does not pick a model on its own.
+      const selected = chosen !== undefined
+        ? { model: chosen.model, ...chosen.provider === undefined ? {} : { provider: chosen.provider }, by: 'session' }
+        : fallback === undefined ? null : { model: fallback, by: 'settings' }
       const notes = await config.promptNotes
       const noted = (id: string) => { const note = notes.get(id); return note === undefined ? {} : { promptNotes: note.notes } }
       if (args.kind === 'video') {
@@ -121,6 +134,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
           })
         }
         return {
+          selected,
           providers: out,
           defaults: { provider: settings.defaultVideoProvider ?? null, videoModel: settings.defaultVideoModel ?? null },
           limits: { maxVideoSeconds: settings.maxVideoSeconds },
@@ -143,6 +157,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
         })
       }
       return {
+        selected,
         providers: out,
         defaults: { provider: settings.defaultImageProvider ?? null, imageModel: settings.defaultImageModel ?? null },
       }
@@ -154,10 +169,10 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     description: 'Generate images from a text prompt with an image model of a configured provider. '
       + 'The images are saved under the working directory and shown to the user; each call may cost money, '
       + 'so do not call it repeatedly without the user asking. Use media_list_models to find model ids and the '
-      + 'aspect_ratio/resolution values a model accepts. ' + PROMPT_GUIDE + ' ' + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
+      + 'aspect_ratio/resolution values a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' ' + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
     parameters: {
       prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
-      model: { type: 'string', description: 'Image model id from media_list_models; omit to use the model chosen for this session or the configured default.' },
+      model: { type: 'string', description: 'Image model id; omit to use the model the user selected. Set it only when the user names a model.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       count: { type: 'integer', description: 'Number of images (default 1).' },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
@@ -181,11 +196,11 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'Generation runs in the background and can take minutes; this returns a job id at once, and the session is '
       + 'notified when the video is saved under the working directory. Each call may cost money, so do not call it '
       + 'repeatedly without the user asking, and do not poll the job. Use media_list_models with kind "video" to find '
-      + 'model ids and the durations, resolutions, and aspect ratios a model accepts. ' + PROMPT_GUIDE + ' '
+      + 'model ids and the durations, resolutions, and aspect ratios a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' '
       + ASK_GUIDE.replace('%s', 'subject, length, aspect ratio, whether to include audio'),
     parameters: {
       prompt: { type: 'string', required: true, description: 'The prompt sent to the video model, written for that model as described above.' },
-      model: { type: 'string', description: 'Video model id from media_list_models; omit to use the model chosen for this session or the configured default.' },
+      model: { type: 'string', description: 'Video model id; omit to use the model the user selected. Set it only when the user names a model.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       duration: { type: 'integer', description: 'Length in seconds, one the model lists.' },
       resolution: { type: 'string', description: 'Resolution such as 720p or 1080p, if the model lists it.' },

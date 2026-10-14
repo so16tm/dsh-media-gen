@@ -117,7 +117,7 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): Re
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Button variant="outline" disabled={!ready} title={t('askAgentHint')}
-              onClick={() => { send(() => { props.inputActions.setDraft(agentRequest(values, t, findModel(listing, values.model)?.name)); props.inputActions.submit() }) }}>
+              onClick={() => { send(() => { props.inputActions.setDraft(agentRequest({ ...values, model: effective ?? '' }, t, findModel(listing, effective)?.name)); props.inputActions.submit() }) }}>
               {t('askAgent')}
             </Button>
             <Button variant="primary" disabled={!ready || estimate.error !== undefined || estimate.loading} title={t('generateDirectHint')}

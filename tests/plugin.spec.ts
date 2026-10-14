@@ -132,6 +132,10 @@ describe('plugin apply', () => {
     const generate = tools.find(t => t.name === 'media_generate_video')!
     const submitted = await generate.execute({ prompt: 'a wave', duration: 4 }, { signal, agent: { session: { id: 's1', header: { cwd } } } }) as { model: string }
     expect(submitted.model).toBe('v/vid')
+    // The listing tells the agent which model the user selected for this session.
+    const list = tools.find(t => t.name === 'media_list_models')!
+    expect(await list.execute({ kind: 'video' }, { signal, agent: { session: { id: 's1' } } })).toMatchObject({ selected: { model: 'v/vid', by: 'session' } })
+    expect(await list.execute({ kind: 'video' }, { signal, agent: { session: { id: 's2' } } })).toMatchObject({ selected: null })
     await expect(generate.execute({ prompt: 'a wave', duration: 4 }, { signal, agent: { session: { id: 's2', header: { cwd } } } })).rejects.toMatchObject({ code: 'NO_MODEL' })
     await dispose()
   })
