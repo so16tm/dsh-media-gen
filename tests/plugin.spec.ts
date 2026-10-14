@@ -58,6 +58,7 @@ function fakeContext(agents: FakeAgent[] = [], storage: 'present' | 'late' | 'no
   const listeners = new Map<string, (...args: never[]) => unknown>()
   const tools: { name: string; execute(args: unknown, exec: unknown): Promise<unknown> }[] = []
   const disposers: (() => unknown)[] = []
+  const guards: ((exec: unknown) => string | undefined)[] = []
   const commands: { name: string; handler?(invocation: unknown): Promise<{ kind: string; text: string }> }[] = []
   const services: Record<string, unknown> = {
     credentials: { resolve: async () => ({ value: 'sk-or-k' }) },
@@ -72,7 +73,10 @@ function fakeContext(agents: FakeAgent[] = [], storage: 'present' | 'late' | 'no
       listProviders: () => [{ id: 'openrouter', name: 'OpenRouter' }],
       listConfigurableProviders: () => [],
     },
-    tools: { register: (tool: (typeof tools)[number]) => { tools.push(tool) } },
+    tools: {
+      register: (tool: (typeof tools)[number]) => { tools.push(tool) },
+      guard: (guard: (exec: unknown) => string | undefined) => { guards.push(guard); return () => {} },
+    },
     on: (name: string, fn: (...args: never[]) => unknown) => { listeners.set(name, fn) },
     get: (name: string) => services[name],
     effect: (fn: () => () => unknown) => { disposers.push(fn()) },
@@ -86,7 +90,7 @@ function fakeContext(agents: FakeAgent[] = [], storage: 'present' | 'late' | 'no
     services.storageDomain = memoryStorage()
     for (const w of waiting.splice(0)) if (w.deps.every(d => services[d] !== undefined)) run(w.deps, w.fn)
   }
-  return { ctx, listeners, tools, commands, provideStorage, dispose: async () => { for (const d of disposers) await d() } }
+  return { ctx, listeners, tools, guards, commands, provideStorage, dispose: async () => { for (const d of disposers) await d() } }
 }
 
 function stubNetwork() {
@@ -287,5 +291,83 @@ describe('plugin apply', () => {
     const signal = new AbortController().signal
     expect(await hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal }, async () => ({ kind: 'allow' }))).toEqual({ kind: 'allow' })
     expect(await hook({ name: 'bash', arguments: {}, signal }, async () => ({ kind: 'deny', reason: 'no' }))).toEqual({ kind: 'deny', reason: 'no' })
+  })
+
+  it('asks, rather than allows, when the cost cannot be estimated, and refuses invalid calls', async () => {
+    vi.stubGlobal('fetch', (async () => new Response('down', { status: 503 })) as unknown as typeof fetch)
+    const { ctx, listeners } = fakeContext()
+    apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<unknown>
+    const signal = new AbortController().signal
+    const unpriced = await hook({ name: 'media_generate_image', arguments: { prompts: ['a cat'] }, signal }, async () => ({ kind: 'allow' })) as { kind: string; displayReason: Record<string, string> }
+    expect(unpriced.kind).toBe('ask')
+    expect(unpriced.displayReason.ja).toContain('料金を概算できませんでした')
+    expect(await hook({ name: 'media_generate_image', arguments: { prompts: 'a cat' }, signal }, async () => ({ kind: 'allow' })))
+      .toMatchObject({ kind: 'deny' })
+  })
+
+  it('denies a generation the cost gate never saw, and joins another policy\'s question', async () => {
+    stubNetwork()
+    const { ctx, listeners, guards } = fakeContext()
+    apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<unknown>
+    const signal = new AbortController().signal
+    const skipped = { name: 'media_generate_image', arguments: { prompts: ['a cat'] }, signal }
+    expect(guards.map(g => g(skipped)).find(r => r !== undefined)).toContain('without its cost check')
+    expect(guards.map(g => g({ name: 'bash', arguments: {}, signal })).every(r => r === undefined)).toBe(true)
+    const seen = { name: 'media_generate_image', arguments: { prompts: ['a cat'] }, signal }
+    const both = await hook(seen, async () => ({ kind: 'ask', reason: 'hook asks' })) as { kind: string; reason: string }
+    expect(both.kind).toBe('ask')
+    expect(both.reason).toContain('Estimated cost')
+    expect(both.reason).toContain('hook asks')
+    expect(guards.every(g => g(seen) === undefined)).toBe(true)
+  })
+
+  it('keeps the images saved before a later prompt fails, and says it may be billed', async () => {
+    let generated = 0
+    vi.stubGlobal('fetch', (async (url: string) => {
+      if (url.endsWith('/images/models')) return Response.json({ data: [{ id: 'g/img', name: 'G Image', supported_parameters: {} }] })
+      if (url.endsWith('/endpoints')) return Response.json({ data: { endpoints: [] } })
+      generated += 1
+      const data = generated === 1 ? Buffer.from(PNG) : Buffer.from('not an image')
+      return Response.json({ data: [{ b64_json: data.toString('base64') }] })
+    }) as unknown as typeof fetch)
+    const cwd = await mkdtemp(join(tmpdir(), 'media-'))
+    const { ctx, tools, dispose } = fakeContext()
+    apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
+    const generate = tools.find(t => t.name === 'media_generate_image')!
+    const exec = { signal: new AbortController().signal, agent: { session: { id: 's1', header: { cwd } } } }
+    const value = await generate.execute({ prompts: ['a cat sitting', 'a cat jumping'] }, exec) as { images: unknown[]; failed?: string }
+    expect(value.images).toHaveLength(1)
+    expect(value.failed).toContain('image 2 of 2 failed')
+    expect(value.failed).toContain('may still have charged')
+    await dispose()
+  })
+
+  it('always asks before saving prompt notes or sending an image from outside the working directory', async () => {
+    stubNetwork()
+    const cwd = await mkdtemp(join(tmpdir(), 'media-'))
+    const { ctx, listeners } = fakeContext()
+    apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
+    const signal = new AbortController().signal
+    const agent = { session: { id: 's1', header: { cwd } } }
+    const notes = await hook({ name: 'media_set_prompt_notes', arguments: { model: 'g/img', notes: 'English only.' }, signal, agent }, async () => ({ kind: 'allow' }))
+    expect(notes).toMatchObject({ kind: 'ask' })
+    expect(notes.reason).toContain('English only.')
+    const inside = await hook({ name: 'media_generate_image', arguments: { prompts: ['x'], input_images: ['generated-media/a.png'] }, signal, agent }, async () => ({ kind: 'allow' }))
+    expect(inside).toEqual({ kind: 'allow' })
+    const outside = await hook({ name: 'media_generate_image', arguments: { prompts: ['x'], input_images: [join(tmpdir(), 'elsewhere.png')] }, signal, agent }, async () => ({ kind: 'allow' }))
+    expect(outside.kind).toBe('ask')
+    expect(outside.reason).toContain('outside the working directory')
+  })
+
+  it('asks for the longest allowed length when the video length is left to a model that could exceed the limit', async () => {
+    stubNetwork()
+    const { ctx, listeners } = fakeContext()
+    apply(ctx as never, Config({ defaultVideoModel: 'v/vid', maxVideoSeconds: 5 }) as never)
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ reason: string }>
+    const decision = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
+    expect(decision.reason).toContain('Generate a 4-second video')
   })
 })

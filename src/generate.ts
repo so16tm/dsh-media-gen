@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { VideoJobRecord, VideoJobWatcher } from './jobs.ts'
 import type { MediaFileIndex } from './media-files.ts'
+import { MediaError } from './errors.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
 import { loadInputImage, loadInputImages } from './input-images.ts'
 import type { ImagePlan, LoadedVideoInputs, MediaService, VideoPlan } from './service.ts'
@@ -68,6 +69,20 @@ export interface ImageToolValue {
 }
 
 /**
+ * Mark a failure after which the provider may already have billed the request:
+ * a timeout, or a response that could not be used. The agent must not retry it
+ * on its own.
+ */
+function maybeCharged(error: unknown): Error {
+  if (!(error instanceof MediaError) || (error.code !== 'TIMEOUT' && error.code !== 'INVALID_RESPONSE')) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+  return new MediaError(error.code, `${error.message}; the provider may still have charged for this request, so do not retry without asking the user`, {
+    ...error.status === undefined ? {} : { status: error.status }, cause: error,
+  })
+}
+
+/**
  * Generate and save the images of one plan: the prompt, then each
  * variation, one provider call each. A failure after an image was saved
  * stops the rest and is reported with what was saved.
@@ -85,26 +100,26 @@ export async function runImagePlan(
   let attachmentFailures = 0
   let costUsd: number | null = 0
   let failed: string | undefined
-  for (const [index, text] of [prompt, ...plan.variations].entries()) {
-    let result: Awaited<ReturnType<MediaService['generate']>>
+  const index = config.mediaFiles === undefined ? undefined : await config.mediaFiles
+  const total = 1 + plan.variations.length
+  for (const [n, text] of [prompt, ...plan.variations].entries()) {
     try {
-      result = await service.generate(plan, text, caller.signal, inputs)
+      const result = await service.generate(plan, text, caller.signal, inputs)
+      // A response arrived, so this request is billed even if saving fails.
+      costUsd = costUsd === null || result.costUsd === null ? null : costUsd + result.costUsd
+      const batch = await saveImages(result.images.map(i => i.data), {
+        dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
+      })
+      saved.push(...batch.saved)
+      attachmentFailures += batch.attachmentFailures
+      // Index at once, so images saved before a later failure still show in the chat.
+      // The images are saved either way; a failed entry only hides them from the chat view.
+      if (index !== undefined) await Promise.all(batch.saved.map(i => index.add(i.path, { mediaType: i.mediaType, bytes: i.bytes }).catch(() => {})))
     } catch (error) {
-      if (index === 0) throw error
-      failed = `image ${index + 1} of ${1 + plan.variations.length} failed: ${error instanceof Error ? error.message : String(error)}`
+      if (saved.length === 0) throw maybeCharged(error)
+      failed = `image ${n + 1} of ${total} failed: ${maybeCharged(error).message}`
       break
     }
-    const batch = await saveImages(result.images.map(i => i.data), {
-      dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
-    })
-    saved.push(...batch.saved)
-    attachmentFailures += batch.attachmentFailures
-    costUsd = costUsd === null || result.costUsd === null ? null : costUsd + result.costUsd
-  }
-  if (config.mediaFiles !== undefined) {
-    const index = await config.mediaFiles
-    // The images are saved either way; a failed entry only hides them from the chat view.
-    await Promise.all(saved.map(s => index.add(s.path, { mediaType: s.mediaType, bytes: s.bytes }).catch(() => {})))
   }
   return {
     provider: plan.provider.id,

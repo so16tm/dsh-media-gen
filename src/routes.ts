@@ -277,7 +277,7 @@ export async function handleFile(sources: MediaSources, request: Request): Promi
   } catch {
     return failure(404, 'the file is no longer there')
   }
-  const headers: Record<string, string> = { 'content-type': mediaType, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600' }
+  const headers: Record<string, string> = { 'content-type': mediaType, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' }
   const range = /^bytes=(\d*)-(\d*)$/u.exec(request.headers.get('range') ?? '')
   let start = 0
   let end = size - 1

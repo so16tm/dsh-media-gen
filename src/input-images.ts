@@ -7,7 +7,7 @@
  */
 
 import { readFile, stat } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { MediaError } from './errors.ts'
 import { sniffImage } from './output.ts'
 
@@ -33,6 +33,19 @@ export function inputPaths(paths: readonly string[] | undefined, name: string): 
   const out = [...new Set((paths ?? []).map(p => p.trim()).filter(p => p.length > 0))]
   if (out.length > MAX_INPUT_IMAGES) throw new MediaError('LIMIT_EXCEEDED', `${name} takes at most ${MAX_INPUT_IMAGES} images; got ${out.length}`)
   return out
+}
+
+/**
+ * The input paths that lie outside the working directory. Such a file is sent
+ * to the provider only after the user sees its path.
+ * @param paths - absolute, or relative to `cwd`.
+ * @param cwd - the session working directory.
+ */
+export function outsidePaths(paths: readonly string[], cwd: string): string[] {
+  return paths.filter((path) => {
+    const rel = relative(cwd, isAbsolute(path) ? path : resolve(cwd, path))
+    return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)
+  })
 }
 
 /**

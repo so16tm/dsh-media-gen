@@ -50,7 +50,7 @@ export interface ImageArgs {
  * A prompt that asks for several different images at once, which `count`
  * turns into copies of one collage. English and Japanese wording.
  */
-const VARIANT_LIST = /\b(?:different|various|varied|several|multiple|three|four|five)\s+(?:poses?|angles?|styles?|outfits?|expressions?|scenes?|views?|actions?|positions?)\b|(?:^|\s)[1-9][).]\s|違う|異なる|別々|それぞれ|いろいろな|様々な/iu
+const VARIANT_LIST = /\b(?:different|various|varied|several|multiple|three|four|five)\s+(?:poses?|angles?|styles?|outfits?|expressions?|scenes?|views?|actions?|positions?)\b|\bcollage\b|\bgrid of\b|\b[2-9]\s?x\s?[2-9]\b|(?:^|\s)[1-9][).]\s|(?:違う|異なる|別々の|いろいろな|様々な|さまざまな)(?:\s|の)*(?:ポーズ|角度|アングル|表情|服装|衣装|シーン|場面|構図|スタイル|動き|姿勢)|コラージュ|[2-9２-９]\s*(?:枚|コマ)の?(?:画像|写真|イラスト|絵|カット)/iu
 
 /** A fully resolved generation plan, computed before anything is billed. */
 export interface ImagePlan {
@@ -223,8 +223,14 @@ export class MediaService {
       && Math.min(...model.durations) > settings.maxVideoSeconds) {
       throw new MediaError('LIMIT_EXCEEDED', `every duration model "${model.id}" offers exceeds the configured limit of ${settings.maxVideoSeconds} s`)
     }
-    const inputs = validateVideoInputs(model, args, inputPaths(args.reference_images, 'reference_images'))
-    return { provider, model, params: validateVideoParams(model, args), inputs, staleCatalog: snapshot.stale }
+    // When the model could pick a length above the limit, ask for the longest one within it.
+    const offered = model.durations ?? []
+    const within = offered.filter(d => d <= settings.maxVideoSeconds)
+    const capped = args.duration === undefined && within.length > 0 && within.length < offered.length
+      ? { ...args, duration: Math.max(...within) }
+      : args
+    const inputs = validateVideoInputs(model, capped, inputPaths(capped.reference_images, 'reference_images'))
+    return { provider, model, params: validateVideoParams(model, capped), inputs, staleCatalog: snapshot.stale }
   }
 
   /** Approximate the plan's cost; undefined when the SKUs cannot be read. */

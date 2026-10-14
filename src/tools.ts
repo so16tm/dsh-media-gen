@@ -64,8 +64,13 @@ const STATUS_LIMIT = 20
 
 export { sessionIdOf, type ImageToolValue } from './generate.ts'
 
+/** The schema's ceiling on images per call. */
+const MAX_IMAGES_PER_CALL = 10
+
 /** Settings and stores the tools need. */
 export interface ToolConfig extends GenerateConfig {
+  /** Per-request timeout for provider calls. */
+  requestTimeoutMs: number
   /** Per-session model choices, ready once their storage has opened. */
   sessionModels: Promise<SessionModelStore>
   /** Prompt-writing notes by model id, ready once their storage has opened. */
@@ -228,7 +233,8 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
         }
       },
     },
-    timeoutMs: 600_000,
+    // Up to the most images one call may make, each waiting its own request timeout.
+    timeoutMs: MAX_IMAGES_PER_CALL * config.requestTimeoutMs + 60_000,
     async execute(args, exec) {
       const image = imageToolArgs(args)
       const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', image, exec), exec.signal)

@@ -125,7 +125,18 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void; initi
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Button variant="outline" disabled={!ready} title={t('askAgentHint')}
-              onClick={() => { send(() => { props.inputActions.setDraft(agentRequest({ ...values, model: effective ?? '' }, t, findModel(listing, effective)?.name)); props.inputActions.submit() }) }}>
+              onClick={() => {
+                send(async () => {
+                  // The tool prefers the session's model over the one the agent names, so a different
+                  // model picked here replaces the session's first; both buttons then use the card's model.
+                  const chosen = choices?.[values.kind]
+                  if (values.model !== '' && chosen != null && values.model !== chosen.model) {
+                    await props.command(`/media-model ${values.kind} ${values.model}`)
+                  }
+                  props.inputActions.setDraft(agentRequest({ ...values, model: effective ?? '' }, t, findModel(listing, effective)?.name))
+                  props.inputActions.submit()
+                })
+              }}>
               {t('askAgent')}
             </Button>
             <Button variant="primary" disabled={!ready || estimate.error !== undefined || estimate.loading} title={t('generateDirectHint')}

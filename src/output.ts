@@ -98,12 +98,17 @@ export async function saveImages(
   const stem = `${timestamp(options.now ?? new Date())}-${slug(options.model)}`
   const saved: SavedImage[] = []
   let attachmentFailures = 0
-  for (const [index, data] of images.entries()) {
+  // Every image is checked before any is written, so a bad one leaves no partial batch.
+  const types = images.map((data) => {
     if (data.byteLength > options.maxBytes) {
       throw new MediaError('INVALID_RESPONSE', `a generated image is ${data.byteLength} bytes, above the ${options.maxBytes}-byte limit`)
     }
     const mediaType = sniffImage(data)
     if (mediaType === undefined) throw new MediaError('INVALID_RESPONSE', 'the provider returned an unsupported image format')
+    return mediaType
+  })
+  for (const [index, data] of images.entries()) {
+    const mediaType = types[index]!
     const path = await writeNewFile(options.dir, `${stem}-${index + 1}`, EXTENSIONS[mediaType], data)
     const entry: SavedImage = { path, mediaType, bytes: data.byteLength }
     if (options.attachments !== undefined && options.attachments.imageLimits.mediaTypes.includes(mediaType)) {

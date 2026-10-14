@@ -26,10 +26,13 @@ import { MemoryMediaFileIndex, openMediaFileIndex, type MediaFileIndex } from '.
 import { registerRoutes, type FetchRegistry } from './routes.ts'
 import type { StorageDomainService } from './storage.ts'
 import { TurnGuard } from './turn-guard.ts'
+import { workingDirectory } from './generate.ts'
+import { outsidePaths } from './input-images.ts'
+import { MediaError, type MediaErrorCode } from './errors.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
 import { MediaService, type ImageArgs } from './service.ts'
-import { imageToolArgs, registerTools, sessionArgs, sessionIdOf, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
+import { imageToolArgs, registerTools, sessionArgs, sessionIdOf, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO, TOOL_SET_PROMPT_NOTES } from './tools.ts'
 import type { VideoArgs } from './video.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -140,6 +143,11 @@ const STORAGE_WAIT_MS = 10_000
 
 /** Prompt excerpt length shown in the approval prompt; the agent writes the prompt, so most of it is shown. */
 const PROMPT_PREVIEW = 1500
+
+/** Errors that mean the plugin refuses the request itself, before any charge. */
+const REJECTED_REQUEST: ReadonlySet<MediaErrorCode> = new Set([
+  'NO_PROVIDER', 'PROVIDER_NOT_FOUND', 'NO_MODEL', 'UNSUPPORTED_MODEL', 'UNSUPPORTED_PARAMETER', 'INVALID_REQUEST', 'LIMIT_EXCEEDED',
+])
 
 /**
  * Register the media tools and the cost-approval gate.
@@ -335,6 +343,7 @@ export function apply(ctx: Context, config: Config): void {
 
   registerTools(ctx, service, {
     ...generateConfig,
+    requestTimeoutMs: config.requestTimeoutMs,
     sessionModels,
     promptNotes,
   })
@@ -346,17 +355,66 @@ export function apply(ctx: Context, config: Config): void {
     return await next()
   })
 
+  // The cost gate runs outermost, so a listener that allows without calling
+  // next() cannot skip it; the guard below denies any generation it never saw.
+  const gated = new WeakSet<object>()
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    const decision = await next()
-    if (decision.kind !== 'allow') return decision
-    if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return decision
+    if (exec.name === TOOL_SET_PROMPT_NOTES) {
+      // Notes reach every later session's agent, so the user sees what is saved.
+      const downstream = await next()
+      if (downstream.kind !== 'allow') return downstream
+      const args = exec.arguments as { model?: unknown; notes?: unknown } | undefined
+      const notes = (lang: Parameters<typeof t>[0]) => t(lang, 'approval.notes', { model: String(args?.model ?? ''), notes: String(args?.notes ?? '') })
+      return { kind: 'ask', reason: notes('en'), displayReason: localized(notes) }
+    }
+    if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return await next()
+    gated.add(exec)
+    const downstream = await next()
+    if (downstream.kind === 'deny' || downstream.kind === 'cancel') return downstream
     const repeat = turnGuard.repeat(exec.agent)
-    if (!repeat && (!config.requireApproval.get() || await autoApproved(sessionIdOf(exec)))) return decision
-    const raw = exec.arguments as { prompt?: unknown; prompts?: unknown }
+    // A file outside the working directory is sent away only after the user sees its path.
+    const outside = await outsideInputs(exec)
+    if (!repeat && outside.length === 0 && (!config.requireApproval.get() || await autoApproved(sessionIdOf(exec)))) return downstream
+    const ours = await costQuestion(exec, repeat, outside)
+    if (ours.kind !== 'ask' || downstream.kind !== 'ask' || downstream.reason === undefined) return ours
+    // Another policy asks too: one question carries both reasons.
+    const reason = downstream.reason
+    return {
+      kind: 'ask',
+      reason: `${ours.reason ?? ''}\n${reason}`,
+      displayReason: Object.fromEntries(Object.entries(ours.displayReason ?? { en: ours.reason ?? '' })
+        .map(([lang, text]) => [lang, `${text}\n${downstream.displayReason?.[lang] ?? reason}`])) as { en: string },
+    }
+  }, { prepend: true })
+  ctx.effect(() => ctx.tools.guard(exec =>
+    (exec.name === TOOL_GENERATE_IMAGE || exec.name === TOOL_GENERATE_VIDEO) && !gated.has(exec)
+      ? 'media generation was allowed without its cost check; it was not run and nothing was charged'
+      : undefined))
+
+  /** Input image paths of a generation call that lie outside the session working directory. */
+  async function outsideInputs(exec: { arguments: unknown; signal: AbortSignal; agent?: unknown }): Promise<string[]> {
+    const raw = exec.arguments as Record<string, unknown> | undefined
+    const paths = [raw?.input_images, raw?.reference_images, raw?.first_frame, raw?.last_frame]
+      .flatMap(v => (Array.isArray(v) ? v : [v])).filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim())
+    if (paths.length === 0) return []
+    try {
+      return outsidePaths(paths, await workingDirectory(ctx, exec))
+    } catch {
+      return paths
+    }
+  }
+
+  /** The approval question for one generation call; a call it cannot price still asks. */
+  async function costQuestion(
+    exec: { name: string; arguments: unknown; signal: AbortSignal; agent?: unknown }, repeat: boolean, outside: readonly string[],
+  ): Promise<PreToolDecision> {
+    const raw = exec.arguments as { prompt?: unknown; prompts?: unknown } | undefined
     const args = exec.name === TOOL_GENERATE_IMAGE
-      ? Array.isArray(raw?.prompts) && raw.prompts.every(p => typeof p === 'string') ? imageToolArgs(raw as { prompts: string[] }) : undefined
+      ? Array.isArray(raw?.prompts) && raw.prompts.length > 0 && raw.prompts.every(p => typeof p === 'string') ? imageToolArgs(raw as { prompts: string[] }) : undefined
       : raw
-    if (typeof args?.prompt !== 'string') return decision
+    if (typeof args?.prompt !== 'string') {
+      return { kind: 'deny', reason: `invalid arguments: ${exec.name === TOOL_GENERATE_IMAGE ? 'prompts must be a non-empty array of strings' : 'prompt must be a string'}; nothing was charged` }
+    }
     const preview = (text: string) => (text.length > PROMPT_PREVIEW ? `${text.slice(0, PROMPT_PREVIEW)}…` : text)
     const prompt = preview(args.prompt)
     let text: (lang: Parameters<typeof t>[0]) => string
@@ -364,7 +422,7 @@ export function apply(ctx: Context, config: Config): void {
     let variations: string[] = []
     try {
       if (exec.name === TOOL_GENERATE_IMAGE) {
-        const plan = await service.plan(await sessionArgs(sessionModels, 'image', args as ImageArgs, exec), exec.signal)
+        const plan = await service.plan(await sessionArgs(sessionModels, 'image', args as ImageArgs, exec as never), exec.signal)
         const cost = await service.estimate(plan, exec.signal)
         inputs = plan.inputs
         variations = plan.variations
@@ -372,7 +430,7 @@ export function apply(ctx: Context, config: Config): void {
           count: String(plan.count * (1 + plan.variations.length)), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
         })
       } else {
-        const plan = await service.planVideo(await sessionArgs(sessionModels, 'video', args as VideoArgs, exec), exec.signal)
+        const plan = await service.planVideo(await sessionArgs(sessionModels, 'video', args as VideoArgs, exec as never), exec.signal)
         const cost = service.estimateVideo(plan)
         const { first, last, references } = plan.inputs
         inputs = [
@@ -385,15 +443,20 @@ export function apply(ctx: Context, config: Config): void {
           model: plan.model.name, provider: plan.provider.id, cost: formatCostRange(lang, cost), seconds: String(duration),
         })
       }
-    } catch {
-      // An invalid request fails in execute with its classified error, before any charge.
-      return decision
+    } catch (error) {
+      // A request the plugin itself rejects would fail before any charge; say so now.
+      if (error instanceof MediaError && REJECTED_REQUEST.has(error.code)) return { kind: 'deny', reason: error.message }
+      // Anything else (a model listing or credential lookup that failed) may
+      // succeed by the time the call runs, so the user still decides.
+      const detail = error instanceof MediaError ? error.message : 'the model listing could not be read'
+      text = lang => t(lang, exec.name === TOOL_GENERATE_IMAGE ? 'approval.unpriced.image' : 'approval.unpriced.video', { detail })
     }
-    const inputLine = (lang: Parameters<typeof t>[0]) => inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`
+    const inputLine = (lang: Parameters<typeof t>[0]) => (inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`)
+      + (outside.length === 0 ? '' : `\n${t(lang, 'approval.outside', { paths: outside.join(', ') })}`)
     const full = (lang: Parameters<typeof t>[0]) =>
       `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${variations.length === 0 ? t(lang, 'approval.prompt', { prompt }) : t(lang, 'approval.variation', { n: '1', prompt })}`
       + variations.map((v, i) => `\n${t(lang, 'approval.variation', { n: String(i + 2), prompt: preview(v) })}`).join('')
       + `\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }
-  })
+  }
 }
