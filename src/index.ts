@@ -17,6 +17,7 @@ import {
 import {
   MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaModelCommand, type SessionModelStore,
 } from './session-models.ts'
+import { MemoryPromptNoteStore, openPromptNoteStore, type PromptNoteStore } from './prompt-notes.ts'
 import { registerRoutes, type FetchRegistry } from './routes.ts'
 import type { StorageDomainService } from './storage.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
@@ -119,8 +120,8 @@ interface CommandRegistry {
 /** Message source of this plugin's in-session notices. */
 const SOURCE_KIND = 'plugin:dsh-media-gen'
 
-/** Prompt excerpt length shown in the approval prompt. */
-const PROMPT_PREVIEW = 200
+/** Prompt excerpt length shown in the approval prompt; the agent writes the prompt, so most of it is shown. */
+const PROMPT_PREVIEW = 1500
 
 /**
  * Register the media tools and the cost-approval gate.
@@ -208,6 +209,14 @@ export function apply(ctx: Context, config: Config): void {
     })
   ctx.effect(() => async () => { await (await sessionModels).close?.() })
 
+  const promptNotes: Promise<PromptNoteStore> = storageDomain === undefined
+    ? Promise.resolve(new MemoryPromptNoteStore())
+    : openPromptNoteStore(storageDomain).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-media-gen: prompt notes will not survive a restart; their storage failed to open: ${String(error)}`)
+      return new MemoryPromptNoteStore()
+    })
+  ctx.effect(() => async () => { await (await promptNotes).close?.() })
+
   // `/media-model` sets the image or video model for the calling session.
   ;(ctx as unknown as { inject(deps: string[], fn: (c: { commands: CommandRegistry }) => void): void })
     .inject(['commands'], (c) => {
@@ -230,6 +239,7 @@ export function apply(ctx: Context, config: Config): void {
     videoJobs,
     maxWatchMs: () => config.videoMaxWatchMs.get(),
     sessionModels,
+    promptNotes,
   })
 
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {

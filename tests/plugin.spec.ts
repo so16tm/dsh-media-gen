@@ -70,7 +70,27 @@ describe('plugin apply', () => {
   it('registers the image and video tools', async () => {
     const { ctx, tools, dispose } = fakeContext()
     apply(ctx as never, Config({}) as never)
-    expect(tools.map(t => t.name)).toEqual(['media_list_models', 'media_generate_image', 'media_generate_video', 'media_video_status'])
+    expect(tools.map(t => t.name)).toEqual([
+      'media_list_models', 'media_generate_image', 'media_generate_video', 'media_video_status',
+      'media_get_prompt_notes', 'media_set_prompt_notes',
+    ])
+    await dispose()
+  })
+
+  it('saves prompt notes and shows them with the model listing', async () => {
+    stubNetwork()
+    const { ctx, tools, dispose } = fakeContext()
+    apply(ctx as never, Config({}) as never)
+    const tool = (name: string) => tools.find(t => t.name === name)!
+    const exec = { signal: new AbortController().signal }
+    expect(await tool('media_set_prompt_notes').execute({ model: ' v/vid ', notes: 'English only; one sentence per shot.' }, exec))
+      .toMatchObject({ model: 'v/vid', notes: 'English only; one sentence per shot.', durable: false })
+    const listing = await tool('media_list_models').execute({ kind: 'video' }, exec) as { providers: { videoModels: { id: string; promptNotes?: string }[] }[] }
+    expect(listing.providers[0]?.videoModels[0]).toMatchObject({ id: 'v/vid', promptNotes: 'English only; one sentence per shot.' })
+    expect(await tool('media_get_prompt_notes').execute({}, exec)).toMatchObject({ notes: [{ model: 'v/vid' }] })
+    await expect(tool('media_set_prompt_notes').execute({ model: 'v/vid', notes: 'x'.repeat(2001) }, exec)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(await tool('media_set_prompt_notes').execute({ model: 'v/vid', notes: ' ' }, exec)).toMatchObject({ deleted: true })
+    expect(await tool('media_get_prompt_notes').execute({ model: 'v/vid' }, exec)).toMatchObject({ notes: [] })
     await dispose()
   })
 

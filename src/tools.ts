@@ -12,6 +12,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { describeJob, type VideoJobRecord, type VideoJobWatcher } from './jobs.ts'
 import type { ParameterSpec } from './openrouter.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
+import { MAX_NOTE_CHARS, type PromptNoteStore } from './prompt-notes.ts'
 import { withSessionModel, type MediaKind, type SessionModelStore } from './session-models.ts'
 import type { MediaService } from './service.ts'
 
@@ -20,6 +21,18 @@ export const TOOL_LIST_MODELS = 'media_list_models'
 export const TOOL_GENERATE_IMAGE = 'media_generate_image'
 export const TOOL_GENERATE_VIDEO = 'media_generate_video'
 export const TOOL_VIDEO_STATUS = 'media_video_status'
+export const TOOL_GET_PROMPT_NOTES = 'media_get_prompt_notes'
+export const TOOL_SET_PROMPT_NOTES = 'media_set_prompt_notes'
+
+/** How the model-facing prompt is written; shared by both generation tools. */
+const PROMPT_GUIDE = 'Write the prompt for the chosen model from what the user wants: follow the model\'s promptNotes from '
+  + 'media_list_models (language, sentences or tags, length) and decide yourself whether to translate, expand, or restructure '
+  + 'the user\'s wording. Keep text the user wants shown in the output exactly as given. The user sees the final prompt '
+  + 'before anything is billed.'
+
+/** When details are missing; shared by both generation tools. */
+const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
+  + '(%s), ask the user once before generating, with ask_user_question when available, instead of guessing.'
 
 /** Prompt excerpt stored with a video job. */
 const PROMPT_EXCERPT = 200
@@ -37,6 +50,8 @@ export interface ToolConfig {
   maxWatchMs: () => number
   /** Per-session model choices, ready once their storage has opened. */
   sessionModels: Promise<SessionModelStore>
+  /** Prompt-writing notes by model id, ready once their storage has opened. */
+  promptNotes: Promise<PromptNoteStore>
 }
 
 /**
@@ -95,7 +110,8 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
   ctx.tools.register(defineTool({
     name: TOOL_LIST_MODELS,
     description: 'List the image or video generation models available through the providers configured in DeepSeek Harness, '
-      + 'with the parameters each model accepts. Call this before media_generate_image or media_generate_video when no model is known.',
+      + 'with the parameters each model accepts and any promptNotes saved for it. Call this before media_generate_image or '
+      + 'media_generate_video to learn how to write the prompt for the model.',
     parameters: {
       kind: { type: 'string', enum: ['image', 'video'], description: 'Which models to list (default image).' },
       provider: { type: 'string', description: 'DSH provider id; omit to list every media-capable provider.' },
@@ -111,6 +127,8 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       if (providers.length === 0) service.bridge.pick()
       const options = { refresh: args.refresh === true, signal: exec.signal }
       const settings = service.settings()
+      const notes = await config.promptNotes
+      const noted = (id: string) => { const note = notes.get(id); return note === undefined ? {} : { promptNotes: note.notes } }
       if (args.kind === 'video') {
         const out = []
         for (const provider of providers) {
@@ -129,6 +147,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
               ...m.audio === undefined ? {} : { audio: m.audio },
               ...m.seed === undefined ? {} : { seed: m.seed },
               pricingUsd: { ...m.pricingSkus },
+              ...noted(m.id),
             })),
           })
         }
@@ -150,6 +169,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
             name: m.name,
             ...m.description === undefined ? {} : { description: m.description.slice(0, 300) },
             parameters: Object.fromEntries(Object.entries(m.parameters).map(([k, v]) => [k, describeSpec(v)])),
+            ...noted(m.id),
           })),
         })
       }
@@ -165,9 +185,9 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     description: 'Generate images from a text prompt with an image model of a configured provider. '
       + 'The images are saved under the working directory and shown to the user; each call may cost money, '
       + 'so do not call it repeatedly without the user asking. Use media_list_models to find model ids and the '
-      + 'aspect_ratio/resolution values a model accepts.',
+      + 'aspect_ratio/resolution values a model accepts. ' + PROMPT_GUIDE + ' ' + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
     parameters: {
-      prompt: { type: 'string', required: true, description: 'What to draw. Pass the user\'s wording; do not translate it unless asked.' },
+      prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
       model: { type: 'string', description: 'Image model id from media_list_models; omit to use the model chosen for this session or the configured default.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       count: { type: 'integer', description: 'Number of images (default 1).' },
@@ -212,9 +232,10 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'Generation runs in the background and can take minutes; this returns a job id at once, and the session is '
       + 'notified when the video is saved under the working directory. Each call may cost money, so do not call it '
       + 'repeatedly without the user asking, and do not poll the job. Use media_list_models with kind "video" to find '
-      + 'model ids and the durations, resolutions, and aspect ratios a model accepts.',
+      + 'model ids and the durations, resolutions, and aspect ratios a model accepts. ' + PROMPT_GUIDE + ' '
+      + ASK_GUIDE.replace('%s', 'subject, length, aspect ratio, whether to include audio'),
     parameters: {
-      prompt: { type: 'string', required: true, description: 'What the video shows. Pass the user\'s wording; do not translate it unless asked.' },
+      prompt: { type: 'string', required: true, description: 'The prompt sent to the video model, written for that model as described above.' },
       model: { type: 'string', description: 'Video model id from media_list_models; omit to use the model chosen for this session or the configured default.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       duration: { type: 'integer', description: 'Length in seconds, one the model lists.' },
@@ -290,6 +311,45 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, STATUS_LIMIT)
       return { jobs } as never
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: TOOL_GET_PROMPT_NOTES,
+    description: 'Read the saved prompt-writing notes, for one model or for every model that has some.',
+    parameters: {
+      model: { type: 'string', description: 'Model id; omit to read every saved note.' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }] },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const notes = await config.promptNotes
+      const rows = args.model === undefined ? notes.list() : [[args.model, notes.get(args.model)] as const]
+      return {
+        notes: rows.flatMap(([model, note]) => note === undefined ? [] : [{ model, notes: note.notes, updatedAt: note.updatedAt }]),
+        durable: notes.durable,
+      } as never
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: TOOL_SET_PROMPT_NOTES,
+    description: 'Save prompt-writing notes for one image or video model, replacing its earlier notes; an empty text deletes them. '
+      + 'Use this when the user asks to add or change how prompts for a model should be written. Keep notes short and '
+      + 'practical: the language the model understands, sentences or comma-separated tags, a good length, strengths, '
+      + 'things to avoid. When the notes come from documentation you looked up, say where in the notes. Read the current '
+      + `notes first with ${TOOL_GET_PROMPT_NOTES} and keep what still applies.`,
+    parameters: {
+      model: { type: 'string', required: true, description: 'Model id as media_list_models lists it.' },
+      notes: { type: 'string', required: true, description: `The complete notes, at most ${MAX_NOTE_CHARS} characters.` },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    async execute(args) {
+      const notes = await config.promptNotes
+      const saved = await notes.set(args.model, args.notes)
+      return (saved === undefined
+        ? { model: args.model.trim(), deleted: true, durable: notes.durable }
+        : { model: args.model.trim(), notes: saved.notes, updatedAt: saved.updatedAt, durable: notes.durable }) as never
     },
   }))
 }
