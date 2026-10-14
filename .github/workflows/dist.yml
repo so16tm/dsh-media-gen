@@ -1,0 +1,44 @@
+# Check every push, and publish the built plugin to dist/<branch> so it
+# installs from GitHub without a local build:
+#   dsh plugin --profile <profile> add github:so16tm/dsh-media-gen#dist/main
+name: dist
+
+on:
+  push:
+    branches: ['main', 'claude/**']
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dist-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: node scripts/make-dist.mjs
+      - name: Publish dist/${{ github.ref_name }}
+        if: github.event_name == 'push'
+        working-directory: dist
+        run: |
+          git init -q -b dist
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Build of ${GITHUB_SHA} from ${GITHUB_REF_NAME}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/dist/${GITHUB_REF_NAME}"

@@ -41,10 +41,18 @@ DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。D
 
 ## インストール
 
+GitHub のビルド済みブランチから入れます。手元での clone やビルドは要りません。
+
 ```sh
-pnpm install && pnpm build
-dsh plugin --profile <profile> add /path/to/dsh-media-gen
+dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git#dist/main
 ```
+
+- `dist/<ブランチ名>` は、GitHub Actions（`.github/workflows/dist.yml`）が push のたびに作るビルド済みのブランチです。`lib/` を含み、ビルド用のスクリプトを持たないので、pnpm のビルド許可（`allowBuilds`）も要りません。開発中のブランチを試すときは `#dist/claude/project-thread-ugdzqc` のように指定します。
+- リポジトリは非公開なので、PC の git が GitHub にサインインできている必要があります（Windows なら Git Credential Manager）。
+- 新しい版に入れ替えるときは、同じ `add` をもう一度実行します。
+- 使うのをやめるときは `dsh plugin --profile <profile> remove dsh-media-gen` です。
+
+開発するときだけ clone して `pnpm install && pnpm build` し、`dsh plugin --profile <profile> add <clone の絶対パス>` で入れます。
 
 対象 DSH：`0.2.0-rc.2` 以上 `0.3.0` 未満（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。開発と型チェックは `0.2.0-rc.2` の公開パッケージで行っています。
 
