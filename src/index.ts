@@ -262,8 +262,19 @@ export function apply(ctx: Context, config: Config): void {
         name: MEDIA_MODEL_COMMAND,
         description: 'Choose the image or video generation model for this session',
         input: { hint: 'image|video <model-id> [provider]' },
-        handler: async ({ agent, rawInput, signal }) =>
-          runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal),
+        handler: async ({ agent, rawInput, signal }) => {
+          const outcome = await runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal)
+          const [kind, model] = rawInput.trim().split(/\s+/u)
+          // Tell the agent at its next step, so it does not reuse a model id it saw before the change.
+          if (outcome.kind === 'success' && (kind === 'image' || kind === 'video') && model !== undefined) {
+            agent.inject(createUserMessage({
+              content: [{ type: 'text', text: `The user changed the ${kind} generation model for this session: ${outcome.text}. `
+                + `Leave model unset in media_generate_${kind} so this selection is used.` }],
+              source: { kind: SOURCE_KIND, form: 'notice', summary: boundContextSummary(`${kind} model changed`) },
+            }))
+          }
+          return outcome
+        },
       })
       c.commands.register({
         name: MEDIA_APPROVAL_COMMAND,

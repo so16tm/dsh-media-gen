@@ -176,7 +176,12 @@ describe('plugin apply', () => {
     apply(ctx as never, Config({}) as never)
     const command = commands.find(c => c.name === 'media-model')!
     const signal = new AbortController().signal
-    expect(await command.handler!({ agent: fakeAgent('s1'), rawInput: ' video v/vid', signal })).toMatchObject({ kind: 'success' })
+    const caller = fakeAgent('s1')
+    expect(await command.handler!({ agent: caller, rawInput: ' video v/vid', signal })).toMatchObject({ kind: 'success' })
+    // The agent hears of the change, so it writes the prompt for the new model.
+    expect(JSON.stringify(caller.injected)).toContain('Leave model unset in media_generate_video')
+    await command.handler!({ agent: caller, rawInput: 'video', signal })
+    expect(caller.injected).toHaveLength(1)
     const generate = tools.find(t => t.name === 'media_generate_video')!
     const submitted = await generate.execute({ prompt: 'a wave', duration: 4 }, { signal, agent: { session: { id: 's1', header: { cwd } } } }) as { model: string }
     expect(submitted.model).toBe('v/vid')
