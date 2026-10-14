@@ -22,6 +22,7 @@ import {
   IMAGE_COMMAND, IMAGE_HINT, runImageCommand, runVideoCommand, VIDEO_COMMAND, VIDEO_HINT, type DirectDeps,
 } from './direct.ts'
 import { MemoryPromptNoteStore, openPromptNoteStore, type PromptNoteStore } from './prompt-notes.ts'
+import { MemoryMediaFileIndex, openMediaFileIndex, type MediaFileIndex } from './media-files.ts'
 import { registerRoutes, type FetchRegistry } from './routes.ts'
 import type { StorageDomainService } from './storage.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
@@ -242,11 +243,20 @@ export function apply(ctx: Context, config: Config): void {
     }))
   ctx.effect(() => async () => { await (await promptNotes).close?.() })
 
+  const mediaFiles: Promise<MediaFileIndex> = storageDomain.then(domain => domain === undefined
+    ? new MemoryMediaFileIndex()
+    : openMediaFileIndex(domain).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-media-gen: generated images will not show in the chat after a restart; their index failed to open: ${String(error)}`)
+      return new MemoryMediaFileIndex()
+    }))
+  ctx.effect(() => async () => { await (await mediaFiles).close?.() })
+
   const generateConfig = {
     outputDir: config.outputDir,
     maxImageBytes: config.maxImageBytes,
     videoJobs,
     maxWatchMs: () => config.videoMaxWatchMs.get(),
+    mediaFiles,
   }
   const direct: DirectDeps = {
     ctx, service, config: generateConfig, sessionModels, requireApproval: () => config.requireApproval.get(),
@@ -316,9 +326,11 @@ export function apply(ctx: Context, config: Config): void {
 
   // Model lists and session choices for the browser half's pickers.
   ;(ctx as unknown as { inject(deps: string[], fn: (c: { connection: { fetch: FetchRegistry } }) => void): void })
-    .inject(['connection'], (c) => { registerRoutes(c.connection.fetch, service, sessionModels, () => ({
-      image: config.chatImageModels.get(), video: config.chatVideoModels.get(),
-    })) })
+    .inject(['connection'], (c) => {
+      registerRoutes(c.connection.fetch, service, sessionModels, () => ({
+        image: config.chatImageModels.get(), video: config.chatVideoModels.get(),
+      }), () => config.requireApproval.get(), { files: mediaFiles, jobs: videoJobs })
+    })
 
   registerTools(ctx, service, {
     ...generateConfig,

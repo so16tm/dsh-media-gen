@@ -8,6 +8,7 @@
 
 import type { ComponentType } from 'react'
 import { PICKER_DICTIONARIES, PICKER_LOCALE } from './locales.ts'
+import { MediaCommandView, MediaToolView } from './media-view.tsx'
 import { InputControl, SettingsView } from './pickers.tsx'
 import { VIDEO_PREVIEW_ID, VIDEO_TYPES, VideoBody } from './video.tsx'
 
@@ -19,6 +20,12 @@ export const CONFIG_KEY = 'dsh-media-gen#media-gen'
 
 /** Id of the media control among the chat input's left controls. */
 export const INPUT_PICKER_ID = 'dsh-media-gen.models'
+
+/** Tool calls whose chat rows show the generated media. */
+export const MEDIA_TOOLS = ['media_generate_image', 'media_generate_video'] as const
+
+/** Commands whose chat rows show the generated media. */
+export const MEDIA_COMMANDS = ['image', 'video'] as const
 
 /** Locale namespace of the preview's labels. */
 const LOCALE = 'mediaGenVideo'
@@ -106,6 +113,17 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
     name: 'plugins.row.config', key: CONFIG_KEY, locale: PICKER_LOCALE,
   }, SettingsView as ComponentType<never>)), 'media-gen: settings page')
+  // DSH's tool and command rows are keyed by name; these replace the generic card for this plugin's names only.
+  for (const key of MEDIA_TOOLS) {
+    ctx.effect(() => ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
+      name: 'tool.call.toolview', key, locale: PICKER_LOCALE,
+    }, MediaToolView as ComponentType<never>)), `media-gen: ${key} row`)
+  }
+  for (const key of MEDIA_COMMANDS) {
+    ctx.effect(() => ctx.slots.inject('conversation.chat.commandview', () => ctx.slots.register({
+      name: 'conversation.chat.commandview', key, locale: PICKER_LOCALE,
+    }, MediaCommandView as ComponentType<never>)), `media-gen: /${key} row`)
+  }
   ctx.effect(() => ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
     name: 'conversation.input.left',
     id: INPUT_PICKER_ID,

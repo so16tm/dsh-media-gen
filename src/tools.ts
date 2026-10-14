@@ -189,6 +189,11 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     output: {
       schema: { type: 'json' },
       render: (_args, value) => renderImageResult(value as unknown as ImageToolValue),
+      // The chat's media view shows the saved files from this; the model never sees it.
+      presentationMeta: (_args, value) => {
+        const result = value as unknown as ImageToolValue
+        return { model: result.model, images: result.images.map(i => ({ path: i.path, mediaType: i.mediaType })) }
+      },
     },
     timeoutMs: 600_000,
     async execute(args, exec) {
@@ -218,6 +223,10 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     output: {
       schema: { type: 'json' },
       render: (_args, value) => [{ type: 'text', text: describeJob(value as unknown as VideoJobRecord) }],
+      presentationMeta: (_args, value) => {
+        const job = value as unknown as VideoJobRecord
+        return { jobId: job.id, model: job.modelName }
+      },
     },
     async execute(args, exec) {
       const plan = await service.planVideo(await sessionArgs(config.sessionModels, 'video', args, exec), exec.signal)

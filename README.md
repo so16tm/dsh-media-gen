@@ -80,14 +80,15 @@ DSH の Models 設定で OpenRouter のプロバイダーを追加し、API キ�
 
 ## 画面側（ブラウザー）
 
-`lib/client.js` を DSH の画面に読み込ませ、次の 4 つを追加します。
+`lib/client.js` を DSH の画面に読み込ませ、次の 5 つを追加します。
 
 - 動画プレビュー：mp4・m4v・webm・mov を DSH のファイルプレビューで再生します。DSH が丸ごと読み込める大きさ（32 MiB）までです。
 - 設定画面：プラグイン画面の「dsh-media-gen」の設定から、既定の画像・動画モデルをプロバイダーの一覧から選べます。最大枚数や秒数、承認・通知の有無も変更できます。
 - チャット欄の選択欄：上記のとおりです。
 - 生成カード：上記の「2 つの使い方」のとおりです。
+- 会話の中の表示：`media_generate_image`・`media_generate_video` の呼び出しと `/image`・`/video` の結果の行に、生成した画像と動画を表示します。画像を押すと DSH のファイルプレビューで開きます。動画は、ジョブが終わるまでその行で状態を確かめ、保存されたら再生できるようにします。DSH の汎用ツールカードの代わりに、これらの名前の行だけを置き換えます。
 
-モデルの一覧と概算料金は、Host 側の認証つきルート `api/media-gen.models`、`api/media-gen.session`、`api/media-gen.estimate` から読みます。API キーはブラウザーに渡しません。
+モデルの一覧と概算料金は、Host 側の認証つきルート `api/media-gen.models`、`api/media-gen.session`、`api/media-gen.estimate` から読みます。生成した画像と動画は `api/media-gen.file`（`Range` 対応）、動画ジョブの状態は `api/media-gen.job` から読みます。ファイルのルートは、このプラグインが保存したファイルしか返しません。API キーはブラウザーに渡しません。
 
 ## 動画ジョブ
 

@@ -7,6 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { VideoJobRecord, VideoJobWatcher } from './jobs.ts'
+import type { MediaFileIndex } from './media-files.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
 import type { ImagePlan, MediaService, VideoPlan } from './service.ts'
 
@@ -49,6 +50,8 @@ export interface GenerateConfig {
   maxImageBytes: number
   videoJobs: Promise<VideoJobWatcher>
   maxWatchMs: () => number
+  /** Index the chat's media views read saved images from. */
+  mediaFiles?: Promise<MediaFileIndex>
 }
 
 /** Canonical value of one image generation. */
@@ -74,6 +77,11 @@ export async function runImagePlan(
   const { saved, attachmentFailures } = await saveImages(result.images.map(i => i.data), {
     dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
   })
+  if (config.mediaFiles !== undefined) {
+    const index = await config.mediaFiles
+    // The images are saved either way; a failed entry only hides them from the chat view.
+    await Promise.all(saved.map(s => index.add(s.path, { mediaType: s.mediaType, bytes: s.bytes }).catch(() => {})))
+  }
   return {
     provider: plan.provider.id,
     model: plan.model.id,

@@ -154,7 +154,8 @@ export async function runImageCommand(deps: DirectDeps, rawInput: string, caller
     }
     const value = await runImagePlan(deps.ctx, deps.service, deps.config, plan, args.prompt, caller)
     const cost = value.costUsd === null ? 'cost not reported' : `${value.costUsd} USD`
-    return { kind: 'success', text: `Saved ${value.images.length} image(s) from ${value.model} (${cost}): ${value.images.map(i => i.path).join(', ')}` }
+    // One path per line, which the chat's media view reads back to show the images.
+    return { kind: 'success', text: `Saved ${value.images.length} image(s) from ${value.model} (${cost}):\n${value.images.map(i => `- ${i.path}`).join('\n')}` }
   } catch (error) {
     return { kind: 'error', text: errorText(error) }
   }

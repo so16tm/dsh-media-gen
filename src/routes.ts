@@ -5,7 +5,12 @@
  * @module dsh-media-gen/src/routes
  */
 
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { MediaError } from './errors.ts'
+import type { VideoJobWatcher } from './jobs.ts'
+import type { MediaFileIndex } from './media-files.ts'
 import type { ImageModel, ParameterSpec } from './openrouter.ts'
 import type { MediaService } from './service.ts'
 import { withSessionModel, type SessionModelStore } from './session-models.ts'
@@ -23,6 +28,12 @@ export const SESSION_PATH = '/api/media-gen.session'
  * `count`, `duration`, `audio=on|off`. Nothing is billed.
  */
 export const ESTIMATE_PATH = '/api/media-gen.estimate'
+
+/** Generated file route for the chat's media views. Query: `path`. Honors `Range`. */
+export const FILE_PATH = '/api/media-gen.file'
+
+/** Video job route for the chat's media views. Query: `id`. */
+export const JOB_PATH = '/api/media-gen.job'
 
 /** Values a picker can offer for one model; absent lists are free-form or unsupported. */
 export interface ModelOptions {
@@ -176,6 +187,72 @@ export async function handleEstimate(service: MediaService, store: SessionModelS
   }
 }
 
+/** What the media views need: the saved-image index and the video jobs. */
+export interface MediaSources {
+  files: Promise<MediaFileIndex>
+  jobs: Promise<VideoJobWatcher>
+}
+
+/** Media type of a file this plugin saved, or undefined for any other path. */
+async function savedMediaType(sources: MediaSources, path: string): Promise<string | undefined> {
+  const image = (await sources.files).get(path)
+  if (image !== undefined) return image.mediaType
+  for (const job of (await sources.jobs).store.list()) {
+    const file = job.files.find(f => f.path === path)
+    if (file !== undefined) return file.mediaType
+  }
+  return undefined
+}
+
+/**
+ * Serve one generated file. Only files this plugin saved are served, so the
+ * route cannot read anything else on the machine. Video players seek with
+ * `Range`, which is answered with 206.
+ */
+export async function handleFile(sources: MediaSources, request: Request): Promise<Response> {
+  const path = new URL(request.url).searchParams.get('path')
+  if (path === null || path.length === 0) return failure(400, 'path is required')
+  const mediaType = await savedMediaType(sources, path)
+  if (mediaType === undefined) return failure(404, 'not a file this plugin generated')
+  let size: number
+  try {
+    size = (await stat(path)).size
+  } catch {
+    return failure(404, 'the file is no longer there')
+  }
+  const headers: Record<string, string> = { 'content-type': mediaType, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600' }
+  const range = /^bytes=(\d*)-(\d*)$/u.exec(request.headers.get('range') ?? '')
+  let start = 0
+  let end = size - 1
+  if (range !== null && (range[1] !== '' || range[2] !== '')) {
+    if (range[1] === '') {
+      start = Math.max(0, size - Number(range[2]))
+    } else {
+      start = Number(range[1])
+      if (range[2] !== '') end = Math.min(end, Number(range[2]))
+    }
+    if (start > end || start >= size) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${size}` } })
+    headers['content-range'] = `bytes ${start}-${end}/${size}`
+  }
+  headers['content-length'] = String(size === 0 ? 0 : end - start + 1)
+  const status = headers['content-range'] === undefined ? 200 : 206
+  if (request.method === 'HEAD' || size === 0) return new Response(null, { status, headers })
+  const body = Readable.toWeb(createReadStream(path, { start, end })) as ReadableStream<Uint8Array>
+  return new Response(body, { status, headers })
+}
+
+/** Report one video job for the chat's media view. */
+export async function handleJob(sources: MediaSources, request: Request): Promise<Response> {
+  const id = new URL(request.url).searchParams.get('id')
+  if (id === null || id.length === 0) return failure(400, 'id is required')
+  const job = (await sources.jobs).store.list().find(record => record.id === id)
+  if (job === undefined) return failure(404, 'unknown video job')
+  return Response.json({
+    id: job.id, model: job.modelName, status: job.status, ...job.error === undefined ? {} : { error: job.error },
+    files: job.files.map(f => ({ path: f.path, mediaType: f.mediaType })),
+  }, { headers: NO_STORE })
+}
+
 /**
  * Register the routes.
  * @param fetch - DSH's connection fetch registry.
@@ -183,11 +260,17 @@ export async function handleEstimate(service: MediaService, store: SessionModelS
  * @param store - session choices, ready once their storage opened.
  * @param chatModels - models the chat input offers.
  * @param requireApproval - whether the settings ask before each generation.
+ * @param media - saved files and video jobs for the chat's media views.
  */
 export function registerRoutes(
   fetch: FetchRegistry, service: MediaService, store: Promise<SessionModelStore>, chatModels?: () => ChatModels, requireApproval?: () => boolean,
+  media?: MediaSources,
 ): void {
   fetch.register({ path: MODELS_PATH, methods: ['GET'], requestBody: 'buffered', fetch: request => handleModels(service, request) })
   fetch.register({ path: SESSION_PATH, methods: ['GET'], requestBody: 'buffered', fetch: async request => handleSession(await store, service, request, chatModels?.(), requireApproval?.() ?? true) })
   fetch.register({ path: ESTIMATE_PATH, methods: ['GET'], requestBody: 'buffered', fetch: async request => handleEstimate(service, await store, request) })
+  if (media !== undefined) {
+    fetch.register({ path: FILE_PATH, methods: ['GET', 'HEAD'], requestBody: 'buffered', fetch: request => handleFile(media, request) })
+    fetch.register({ path: JOB_PATH, methods: ['GET'], requestBody: 'buffered', fetch: request => handleJob(media, request) })
+  }
 }

@@ -130,6 +130,7 @@ describe('plugin apply', () => {
     expect(preview.text).toContain('--yes')
     const saved = await run('image', '--model g/img --yes a red fox')
     expect(saved.text).toMatch(/^Saved 1 image\(s\) from g\/img/u)
+    expect(saved.text.split('\n')[1]).toMatch(/^- .*generated-media.*\.png$/u)
     const video = await run('video', '--model v/vid --duration 4 --yes waves')
     expect(video).toMatchObject({ kind: 'success' })
     expect(video.text).toContain('job-9')

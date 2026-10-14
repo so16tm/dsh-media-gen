@@ -52,11 +52,15 @@ describe('client bundle', () => {
     expect(bodies.map(({ name, key, id }) => ({ name, key, id }))).toEqual([
       { name: 'sidebar.right.tab.document', key: 'dsh-media-gen/video', id: undefined },
       { name: 'plugins.row.config', key: 'dsh-media-gen#media-gen', id: undefined },
+      { name: 'tool.call.toolview', key: 'media_generate_image', id: undefined },
+      { name: 'tool.call.toolview', key: 'media_generate_video', id: undefined },
+      { name: 'conversation.chat.commandview', key: 'image', id: undefined },
+      { name: 'conversation.chat.commandview', key: 'video', id: undefined },
       { name: 'conversation.input.left', key: undefined, id: 'dsh-media-gen.models' },
     ])
     expect(Object.keys(dictionaries).sort()).toEqual(['mediaGen', 'mediaGenVideo'])
     expect(Object.keys(dictionaries.mediaGen?.ja ?? {}).sort()).toEqual(Object.keys(dictionaries.mediaGen?.en ?? {}).sort())
-    const picker = bodies[2]!.inject!
+    const picker = bodies.find(b => b.id === 'dsh-media-gen.models')!.inject!
     await picker('s1').command('/media-model image g/img')
     expect(lines).toEqual(['/media-model image g/img'])
     await expect(picker('s2').command('/media-model image g/img')).rejects.toThrow('not open')

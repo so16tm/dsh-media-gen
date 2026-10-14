@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { OpenRouterAdapter } from '../src/openrouter.ts'
 import { ProviderBridge } from '../src/provider-bridge.ts'
-import { ESTIMATE_PATH, handleEstimate, handleModels, handleSession, MODELS_PATH, registerRoutes, SESSION_PATH, type FetchRegistry } from '../src/routes.ts'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { MemoryMediaFileIndex } from '../src/media-files.ts'
+import type { VideoJobWatcher } from '../src/jobs.ts'
+import { ESTIMATE_PATH, handleEstimate, handleFile, handleJob, handleModels, handleSession, MODELS_PATH, registerRoutes, SESSION_PATH, type FetchRegistry } from '../src/routes.ts'
 import { MediaService } from '../src/service.ts'
 import { MemorySessionModelStore } from '../src/session-models.ts'
 
@@ -89,5 +94,39 @@ describe('estimate route', () => {
     expect((await bad.json()).error).toContain('4, 8')
     expect((await handleEstimate(svc, store, url(`${ESTIMATE_PATH}?kind=video&sessionId=s1&audio=on`))).status).toBe(400)
     expect((await handleEstimate(svc, store, url(`${ESTIMATE_PATH}?kind=image&count=x`))).status).toBe(400)
+  })
+})
+
+describe('media file and job routes', () => {
+  it('serves only files the plugin saved, with ranges, and reports jobs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'media-'))
+    const image = join(dir, 'a.png')
+    const video = join(dir, 'v.mp4')
+    const other = join(dir, 'secret.txt')
+    await writeFile(image, 'PNGDATA')
+    await writeFile(video, '0123456789')
+    await writeFile(other, 'no')
+    const files = new MemoryMediaFileIndex()
+    await files.add(image, { mediaType: 'image/png', bytes: 7 })
+    const job = { id: 'job-1', modelName: 'V', status: 'completed', files: [{ path: video, mediaType: 'video/mp4', bytes: 10 }] }
+    const jobs = Promise.resolve({ store: { list: () => [job] } } as unknown as VideoJobWatcher)
+    const media = { files: Promise.resolve(files), jobs }
+    const get = (path: string, headers: Record<string, string> = {}) =>
+      handleFile(media, new Request(`http://host/api/media-gen.file?path=${encodeURIComponent(path)}`, { headers }))
+    const full = await get(image)
+    expect(full.status).toBe(200)
+    expect(full.headers.get('content-type')).toBe('image/png')
+    expect(await full.text()).toBe('PNGDATA')
+    const part = await get(video, { range: 'bytes=2-4' })
+    expect(part.status).toBe(206)
+    expect(part.headers.get('content-range')).toBe('bytes 2-4/10')
+    expect(await part.text()).toBe('234')
+    expect(await (await get(video, { range: 'bytes=-3' })).text()).toBe('789')
+    expect((await get(video, { range: 'bytes=20-' })).status).toBe(416)
+    expect((await get(other)).status).toBe(404)
+    expect((await get(join(dir, '..', 'x.png'))).status).toBe(404)
+    const reported = await handleJob(media, new Request('http://host/api/media-gen.job?id=job-1'))
+    expect(await reported.json()).toEqual({ id: 'job-1', model: 'V', status: 'completed', files: [{ path: video, mediaType: 'video/mp4' }] })
+    expect((await handleJob(media, new Request('http://host/api/media-gen.job?id=nope'))).status).toBe(404)
   })
 })
