@@ -57,7 +57,7 @@ dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.g
 
 - リポジトリは非公開なので、PC の git が GitHub にサインインできている必要があります（Windows なら Git Credential Manager）。
 - 更新するときは、削除せずに新しい版のタグで同じ `add` を実行し、DSH を再起動します。入っている版が新しい版に置き換わります。
-- タグを付けずに指定すると、まだ版として公開していない `main` の最新が入ります。DSH はプロファイルの `package.json` に `#` 以下を残さないため、タグなしの `update` も `main` を取りに行きます。版を固定したいときは、タグを付けた `add` で入れ替えてください。
+- タグを付けずに指定すると、まだ版として公開していない `main` の最新が入ります。DSH はプロファイルの `package.json` に `#` 以下を残さないため、タグを付けて入れたあとも、タグなしで入れ直すと `main` の最新になります。版を固定したいときは、タグを付けた `add` で入れ替えてください。
 - 使うのをやめるときは `dsh plugin --profile <profile> remove dsh-media-gen` です。
 
 ## 前提
@@ -159,6 +159,8 @@ clone して `pnpm install && pnpm build` し、`dsh plugin --profile <profile> 
 版は `package.json` の `version` とタグ `v<版>` で管理します。
 
 1. PR で `version` を上げ、[CHANGELOG.md](./CHANGELOG.md) に `## v<版>` の節（対応 DSH と変更点）を追加し、上の対応表を更新します。節がないと `pnpm check` が失敗します。
-2. PR を `main` にマージしたら、そのマージコミットにタグ `v<版>` を付けます。タグは付け直しも削除もしません。古い DSH に対応した版のタグも、対応表に残します。
+2. PR を `main` にマージすると、CI がタグ `v<版>` と GitHub のリリースを自動で作成します。
+
+タグは自分で付けず、付け直しも削除もしません。古い DSH に対応した版のタグも、対応表に残します。CI は PR と `main` への push で `pnpm check` を実行し、コミットした `lib/` がビルド結果と一致するかも確かめます。
 
 新しい DSH への対応や機能の追加・変更はマイナー版（`0.1.0` → `0.2.0`）、不具合の修正はパッチ版（`0.1.0` → `0.1.1`）を上げます。
