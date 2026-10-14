@@ -13,8 +13,8 @@ An image and video generation plugin for DeepSeek Harness (DSH). It reuses the p
 
 ## Features
 
-- **Images:** generates through OpenRouter's Image API (`/images/models`, `/images`). Real API generation has been verified on DSH `0.2.0-rc.2` on Windows.
-- **Videos:** submits jobs through OpenRouter's Video API (`/videos/models`, `/videos`), watches them in the background, saves completed videos in the working directory, and notifies the session. Generation and saving have been verified on DSH `0.2.0-rc.2`.
+- **Images:** generates through OpenRouter's Image API (`/images/models`, `/images`).
+- **Videos:** submits jobs through OpenRouter's Video API (`/videos/models`, `/videos`), watches them in the background, saves completed videos in the working directory, and notifies the session.
 - **Browser integration:** video previews, settings, chat model selectors, generation cards, and inline media displays. **Their appearance in a running DSH instance has not been verified.**
 - Unit tests use mocked network requests.
 
@@ -24,18 +24,18 @@ Approval dialogs, the plugin name, and browser UI support English and Japanese. 
 
 ## Compatibility
 
-See [CHANGELOG.md](CHANGELOG.md) for changes in each release.
+Choose a release compatible with your DSH version from [GitHub Releases](https://github.com/so16tm/dsh-media-gen/releases). Supported and verified DSH versions and release-specific changes are recorded in the release notes and [CHANGELOG.md](CHANGELOG.md).
 
-| Plugin | Supported DSH |
-|---|---|
-| `v0.1.0` | `0.2.x` from `0.2.0-rc.2` onward (verified: `0.2.0-rc.2`) |
+For machine-readable requirements, see `peerDependencies` and `engines` in [package.json](package.json) at the selected tag.
 
 ## Installation
 
 Install a tag compatible with your DSH version. The repository includes the built `lib/` files; cloning, building locally, and pnpm build approvals (`allowBuilds`) are unnecessary.
 
+Replace `<tag>` below with the full tag name of the release you selected from [GitHub Releases](https://github.com/so16tm/dsh-media-gen/releases).
+
 ```sh
-dsh plugin --profile web add 'git+https://github.com/so16tm/dsh-media-gen.git#v0.1.0'
+dsh plugin --profile web add 'git+https://github.com/so16tm/dsh-media-gen.git#<tag>'
 ```
 
 `web` is an example profile. Replace it with your profile name if different.
@@ -203,18 +203,20 @@ dsh plugin --profile web add <absolute-path-to-clone>
 
 After editing `src/`, rebuild with `pnpm build` and commit the generated `lib/` files with the source changes.
 
-DSH peer dependencies require `>=0.2.0-rc.2 <0.3.0`. Development and type checks use the published `0.2.0-rc.2` packages.
+DSH compatibility constraints and development dependency versions are defined in [package.json](package.json); the lockfile records the dependency versions used for reproducible checks.
 
 ### Releases
 
 Versions are managed through `package.json.version` and tags named `v<version>`.
 
-1. In a PR, bump `version`, add a `## v<version>` section to [CHANGELOG.md](CHANGELOG.md) with supported DSH versions and changes, and update the compatibility tables in both README.md and README.ja.md. `pnpm check` fails without the matching CHANGELOG section.
+1. In a PR, bump `version` and add a `## v<version>` section to [CHANGELOG.md](CHANGELOG.md) with supported DSH versions and changes. `pnpm check` fails without the matching CHANGELOG section.
 2. After the PR is merged into `main`, CI automatically creates the version tag and GitHub release.
 
-Do not create, move, or delete tags manually. Keep earlier releases supporting older DSH versions in the compatibility tables. CI runs `pnpm check` for PRs and pushes to `main`, and checks that committed `lib/` files match the build output.
+Do not create, move, or delete tags manually. Keep earlier releases and their compatibility records in CHANGELOG.md. CI runs `pnpm check` for PRs and pushes to `main`, and checks that committed `lib/` files match the build output.
 
-Use a minor version for new DSH support or added/changed features (`0.1.0` → `0.2.0`) and a patch version for bug fixes (`0.1.0` → `0.1.1`).
+Use a minor version for new DSH support or added/changed features and a patch version for bug fixes.
+
+Update both READMEs when usage changes; release numbers and compatibility records belong in CHANGELOG.md. CI uses that version's CHANGELOG section as the GitHub release notes.
 
 ## License
 

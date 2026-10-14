@@ -13,8 +13,8 @@ DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。D
 
 ## 機能
 
-- 画像：OpenRouter の Image API（`/images/models`、`/images`）で生成します。DSH 0.2.0-rc.2（Windows）の実機で、実通信による生成を確認済みです。
-- 動画：OpenRouter の Video API（`/videos/models`、`/videos`）にジョブを登録し、裏で状態を確認して、完成したら作業ディレクトリに保存してセッションに知らせます。DSH 0.2.0-rc.2 の実機で生成と保存を確認済みです。
+- 画像：OpenRouter の Image API（`/images/models`、`/images`）で生成します。
+- 動画：OpenRouter の Video API（`/videos/models`、`/videos`）にジョブを登録し、裏で状態を確認して、完成したら作業ディレクトリに保存してセッションに知らせます。
 - 画面側（動画プレビュー、設定画面、チャット欄のモデル選択と生成カード）は、**DSH 実機での表示は未検証**です。
 - 単体テストはモック通信で行っています。
 
@@ -24,18 +24,18 @@ DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。D
 
 ## 対応バージョン
 
-プラグインの版ごとの対応 DSH は次のとおりです（各版の変更点は [CHANGELOG.md](./CHANGELOG.md)）。
+使用中の DSH に対応する版を [GitHub Releases](https://github.com/so16tm/dsh-media-gen/releases) から選んでください。対応・検証済みの DSH、版ごとの変更点は、各リリースの説明と [CHANGELOG.md](CHANGELOG.md) に記録しています。
 
-| プラグイン | 対応 DSH |
-|---|---|
-| `v0.1.0` | `0.2.0-rc.2` 以降の `0.2.x`（確認済み：`0.2.0-rc.2`） |
+機械的な要件判定に使う値は、選んだタグの [package.json](package.json) の `peerDependencies` と `engines` を参照してください。
 
 ## インストール
 
 使っている DSH に対応する版のタグを指定して、リポジトリから直接入れます。ビルド済みの `lib/` をリポジトリに含めているので、手元での clone やビルド、pnpm のビルド許可（`allowBuilds`）は要りません。
 
+以下の `<tag>` は、[GitHub Releases](https://github.com/so16tm/dsh-media-gen/releases) で選んだ版のタグ名全体に置き換えてください。
+
 ```sh
-dsh plugin --profile web add 'git+https://github.com/so16tm/dsh-media-gen.git#v0.1.0'
+dsh plugin --profile web add 'git+https://github.com/so16tm/dsh-media-gen.git#<tag>'
 ```
 
 - リポジトリは非公開なので、PC の git が GitHub にサインインできている必要があります（Windows なら Git Credential Manager）。
@@ -187,18 +187,20 @@ dsh plugin --profile web add <absolute-path-to-clone>
 
 `src/` を変えたら、`pnpm build` で `lib/` を作り直して一緒にコミットします。
 
-対象 DSH：`0.2.0-rc.2` 以上 `0.3.0` 未満（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。開発と型チェックは `0.2.0-rc.2` の公開パッケージで行っています。
+対応 DSH の制約と開発依存の版は [package.json](package.json) に定義しています。再現可能な検証のために、使用する依存関係の版を lockfile に記録しています。
 
 ### 版の公開
 
 版は `package.json` の `version` とタグ `v<版>` で管理します。
 
-1. PR で `version` を上げ、[CHANGELOG.md](./CHANGELOG.md) に `## v<版>` の節（対応 DSH と変更点）を追加し、README.md と README.ja.md の対応表を更新します。節がないと `pnpm check` が失敗します。
+1. PR で `version` を上げ、[CHANGELOG.md](./CHANGELOG.md) に `## v<版>` の節（対応 DSH と変更点）を追加します。節がないと `pnpm check` が失敗します。
 2. PR を `main` にマージすると、CI がタグ `v<版>` と GitHub のリリースを自動で作成します。
 
-タグは自分で付けず、付け直しも削除もしません。古い DSH に対応した版のタグも、対応表に残します。CI は PR と `main` への push で `pnpm check` を実行し、コミットした `lib/` がビルド結果と一致するかも確かめます。
+タグは自分で付けず、付け直しも削除もしません。過去のリリースと対応情報も CHANGELOG.md に残します。CI は PR と `main` への push で `pnpm check` を実行し、コミットした `lib/` がビルド結果と一致するかも確かめます。
 
-新しい DSH への対応や機能の追加・変更はマイナー版（`0.1.0` → `0.2.0`）、不具合の修正はパッチ版（`0.1.0` → `0.1.1`）を上げます。
+新しい DSH への対応や機能の追加・変更はマイナー版、不具合の修正はパッチ版を上げます。
+
+README の両言語版は使い方が変わるときに更新し、版番号と対応情報は CHANGELOG.md に記録します。CI は該当する版の CHANGELOG の節を GitHub リリースの説明に使います。
 
 ## ライセンス
 
