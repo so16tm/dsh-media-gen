@@ -1,7 +1,7 @@
 /**
- * TurnGuard: tells whether a generation call follows from the user's request.
- * A turn that a notice rather than the user started (a subagent's report, a
- * finished video job) asked for nothing, so a generation there is the agent
+ * TurnGuard: tells whether a generation call follows from a request. A turn
+ * that only a notice started (a subagent's report, a finished job) asked for
+ * nothing, so a generation there is the agent
  * acting on its own and is refused. Inside a turn the user started, the agent
  * may need several calls (more images than one call takes, an image and then
  * a video); the second and later are billed beyond the first, so they are

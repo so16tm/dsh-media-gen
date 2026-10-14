@@ -30,4 +30,13 @@ describe('TurnGuard', () => {
     guard.enter(agent, 1, [user])
     expect(guard.standing(agent)).toBe('first')
   })
+
+  it('treats a goal round or a schedule as a request', () => {
+    const guard = new TurnGuard()
+    const agent = {}
+    guard.enter(agent, 1, [{ source: { kind: 'goal' } }])
+    expect(guard.standing(agent)).toBe('first')
+    guard.enter(agent, 2, [{ source: { kind: 'schedule' } }])
+    expect(guard.standing(agent)).toBe('first')
+  })
 })
