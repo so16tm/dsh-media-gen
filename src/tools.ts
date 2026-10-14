@@ -38,8 +38,10 @@ const MODEL_GUIDE = 'Omit model to use the model the user selected; the selectio
 
 /** When details are missing; shared by both generation tools. */
 /** Generation is billed, so a finished call is never followed by another on the agent's own judgment. */
-const ONCE_GUIDE = 'One user request means one call: once it returns, do not call again on your own to retry, improve, fix, '
-  + 'or vary the result, even if it misses the request. Show the result, say what differs, and let the user decide.'
+const ONCE_GUIDE = 'Make only the generations the user asked for. When they ask for several (for example three images with '
+  + 'different poses), make that many calls, one per variant, or use count when the prompt is the same; never more. Once '
+  + 'those return, do not call again on your own to retry, improve, fix, or vary the results, even if they miss the request: '
+  + 'show them, say what differs, and let the user decide.'
 
 const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
   + '(%s), ask the user once before generating, with ask_user_question when available, instead of guessing.'
@@ -335,8 +337,8 @@ export function renderImageResult(value: ImageToolValue): ContentBlock[] {
     `Cost: ${value.costUsd === null ? 'not reported' : `${value.costUsd} USD`}.`,
     'In your reply, show each image with Markdown such as ![short description](<path>), using the path above, so it '
       + 'appears in the reply itself; to hand a file over as a deliverable, call the present tool with its path.',
-    'This request is done. Do not generate again unless the user asks, even if the image misses the request; '
-      + 'say what differs and let the user decide.',
+    'Do not generate beyond what the user asked for. If this was the last image they asked for, stop here even if it '
+      + 'misses the request; say what differs and let the user decide.',
   ]
   if (value.attachmentFailures > 0) lines.push(`${value.attachmentFailures} image(s) could not be attached inline; the files are saved.`)
   const blocks: ContentBlock[] = [{ type: 'text', text: lines.join('\n') }]
