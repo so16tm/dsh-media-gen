@@ -125,7 +125,10 @@ describe('output', () => {
     expect(saved[0]?.path).toBe(join(dir, '20261014-090507-google-gemini-image-1.png'))
     expect(await readFile(saved[0]!.path)).toEqual(Buffer.from(PNG))
     expect(attachmentFailures).toBe(1)
-    await expect(saveImages([PNG], { dir, model: 'google/Gemini Image', now, maxBytes: 1000 })).rejects.toThrow()
+    // A second save in the same second gets a numbered name; the first file is kept.
+    const again = await saveImages([PNG], { dir, model: 'google/Gemini Image', now, maxBytes: 1000 })
+    expect(again.saved[0]?.path).toBe(join(dir, '20261014-090507-google-gemini-image-1-2.png'))
+    expect(await readFile(saved[0]!.path)).toEqual(Buffer.from(PNG))
   })
 
   it('refuses oversized or unknown data', async () => {
@@ -145,5 +148,17 @@ describe('messages', () => {
 
   it('falls back to English and then to the key', () => {
     expect(t('ja', 'missing.key')).toBe('missing.key')
+  })
+})
+
+describe('writeNewFile', () => {
+  it('numbers a name that is already taken instead of overwriting it', async () => {
+    const { writeNewFile } = await import('../src/output.ts')
+    const dir = await mkdtemp(join(tmpdir(), 'media-'))
+    const first = await writeNewFile(dir, 'a-1', 'png', Uint8Array.from([1]))
+    const second = await writeNewFile(dir, 'a-1', 'png', Uint8Array.from([2]))
+    expect(first).toBe(join(dir, 'a-1.png'))
+    expect(second).toBe(join(dir, 'a-1-2.png'))
+    expect([...await readFile(first)]).toEqual([1])
   })
 })

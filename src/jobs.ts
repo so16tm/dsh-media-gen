@@ -6,10 +6,9 @@
  * @module dsh-media-gen/src/jobs
  */
 
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir } from 'node:fs/promises'
 import { MediaError } from './errors.ts'
-import { slug, timestamp } from './output.ts'
+import { slug, timestamp, writeNewFile } from './output.ts'
 import { openDomain, type DomainSpecLike, type DomainTable, type StorageDomainService } from './storage.ts'
 import { isTerminal, sniffVideo, type CostRange, type VideoJobStatus } from './video.ts'
 
@@ -281,9 +280,7 @@ export class VideoJobWatcher {
     const stem = `${timestamp(new Date(this.now()))}-${slug(record.model)}`
     const saved: SavedVideo[] = []
     for (const [index, item] of downloads.entries()) {
-      const path = join(record.dir, `${stem}-${index + 1}.${item.extension}`)
-      // `wx` never overwrites an existing file.
-      await writeFile(path, item.data, { flag: 'wx' })
+      const path = await writeNewFile(record.dir, `${stem}-${index + 1}`, item.extension, item.data)
       saved.push({ path, mediaType: item.mediaType, bytes: item.data.byteLength })
     }
     return saved
