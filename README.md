@@ -44,12 +44,12 @@ DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。D
 GitHub から直接入れます。ビルド済みの `lib/` をリポジトリに入れてあるので、手元での clone やビルドは要りません。
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git#main
+dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git
 ```
 
-- ビルドスクリプト（`prepare`）を持たないので、pnpm のビルド許可（`allowBuilds`）も要りません。開発中のブランチを試すときは `#claude/project-thread-ugdzqc` のようにブランチ名を指定します。
+- 既定ブランチ（`main`）の最新を入れます。ビルドスクリプト（`prepare`）を持たないので、pnpm のビルド許可（`allowBuilds`）も要りません。
 - リポジトリは非公開なので、PC の git が GitHub にサインインできている必要があります（Windows なら Git Credential Manager）。
-- 新しい版に入れ替えるときは、同じ `add` をもう一度実行します。
+- 新しい版に入れ替えるときは、同じ `add` をもう一度実行します。DSH はプロファイルの `package.json` に `#` 以下のブランチ指定を残さないため、`#ブランチ名` を付けて入れても、次の更新では `main` を取りに行きます。開発中のブランチを試したときは、試し終えたら `#` なしで `add` し直してください。
 - 使うのをやめるときは `dsh plugin --profile <profile> remove dsh-media-gen` です。
 
 開発するときは clone して `pnpm install && pnpm build` し、`dsh plugin --profile <profile> add <clone の絶対パス>` で入れます。`src/` を変えたら、`pnpm build` で `lib/` を作り直して一緒にコミットします。
