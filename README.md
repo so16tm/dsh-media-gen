@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/readme-header.webp" alt="dsh-media-gen — 画像と動画を、会話から" width="960" />
+</p>
+
 # dsh-media-gen
 
 DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。DSH に設定済みのプロバイダーと認証情報をそのまま使い、API キーを二重に登録させません。
