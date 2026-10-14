@@ -6,42 +6,52 @@
  */
 
 import type { ImageModel, ImagePrice } from './openrouter.ts'
+import type { VideoModel } from './video.ts'
 
 /** A listing and whether it may be out of date. */
-export interface CatalogSnapshot {
-  models: readonly ImageModel[]
+export interface CatalogSnapshot<M = ImageModel> {
+  models: readonly M[]
   fetchedAt: number
   /** True when the last refresh failed and this is an older listing. */
   stale: boolean
 }
 
 /** Loader for one provider's listing. */
-export type ModelLoader = (signal?: AbortSignal) => Promise<ImageModel[]>
+export type ModelLoader<M = ImageModel> = (signal?: AbortSignal) => Promise<M[]>
 
 /** Loader for one model's pricing. */
 export type PricingLoader = (modelId: string, signal?: AbortSignal) => Promise<ImagePrice[]>
 
-interface Entry { models: readonly ImageModel[]; fetchedAt: number }
+interface Entry<M> { models: readonly M[]; fetchedAt: number }
 
-/** Per-provider cache of image model listings and pricing. */
+/** Per-provider cache of image and video model listings and image pricing. */
 export class CapabilityCatalog {
-  private readonly listings = new Map<string, Entry>()
+  private readonly listings = new Map<string, Entry<unknown>>()
   private readonly pricing = new Map<string, { lines: readonly ImagePrice[]; fetchedAt: number }>()
 
   constructor(private readonly ttlMs: number, private readonly now: () => number = Date.now) {}
 
   /**
-   * Return a provider's listing, refreshing when expired or forced.
+   * Return a provider's image listing, refreshing when expired or forced.
    * @throws the loader's error when nothing was ever cached.
    */
-  async imageModels(providerId: string, load: ModelLoader, options?: { refresh?: boolean; signal?: AbortSignal }): Promise<CatalogSnapshot> {
-    const cached = this.listings.get(providerId)
+  imageModels(providerId: string, load: ModelLoader, options?: { refresh?: boolean; signal?: AbortSignal }): Promise<CatalogSnapshot> {
+    return this.listing(`image\u0000${providerId}`, load, options)
+  }
+
+  /** Return a provider's video listing; same caching as {@link imageModels}. */
+  videoModels(providerId: string, load: ModelLoader<VideoModel>, options?: { refresh?: boolean; signal?: AbortSignal }): Promise<CatalogSnapshot<VideoModel>> {
+    return this.listing(`video\u0000${providerId}`, load, options)
+  }
+
+  private async listing<M>(key: string, load: ModelLoader<M>, options?: { refresh?: boolean; signal?: AbortSignal }): Promise<CatalogSnapshot<M>> {
+    const cached = this.listings.get(key) as Entry<M> | undefined
     const fresh = cached !== undefined && this.now() - cached.fetchedAt < this.ttlMs
     if (fresh && options?.refresh !== true) return { ...cached, stale: false }
     try {
       const models = await load(options?.signal)
       const entry = { models, fetchedAt: this.now() }
-      this.listings.set(providerId, entry)
+      this.listings.set(key, entry)
       return { ...entry, stale: false }
     } catch (error) {
       if (options?.signal?.aborted || cached === undefined) throw error

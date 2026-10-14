@@ -9,6 +9,7 @@ import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attac
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import { describeJob, type VideoJobRecord, type VideoJobWatcher } from './jobs.ts'
 import type { ParameterSpec } from './openrouter.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
 import type { MediaService } from './service.ts'
@@ -16,11 +17,29 @@ import type { MediaService } from './service.ts'
 /** Wire names of the tools; stable across languages. */
 export const TOOL_LIST_MODELS = 'media_list_models'
 export const TOOL_GENERATE_IMAGE = 'media_generate_image'
+export const TOOL_GENERATE_VIDEO = 'media_generate_video'
+export const TOOL_VIDEO_STATUS = 'media_video_status'
+
+/** Prompt excerpt stored with a video job. */
+const PROMPT_EXCERPT = 200
+
+/** Most jobs one status listing shows. */
+const STATUS_LIMIT = 20
 
 /** Output settings the image tool needs. */
 export interface ToolConfig {
   outputDir: string
   maxImageBytes: number
+  /** Video job watcher, ready once job storage has opened. */
+  videoJobs: Promise<VideoJobWatcher>
+  /** How long a submitted job is watched before polling stops. */
+  maxWatchMs: () => number
+}
+
+/** Session id of the calling agent, when the tool runs inside one. */
+function sessionIdOf(exec: ToolExecution): string | undefined {
+  const id = (exec.agent as { session?: { id?: unknown } } | undefined)?.session?.id
+  return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
 function describeSpec(spec: ParameterSpec): string {
@@ -59,9 +78,10 @@ async function workingDirectory(ctx: Context, exec: ToolExecution): Promise<stri
 export function registerTools(ctx: Context, service: MediaService, config: ToolConfig): void {
   ctx.tools.register(defineTool({
     name: TOOL_LIST_MODELS,
-    description: 'List the image generation models available through the providers configured in DeepSeek Harness, '
-      + 'with the parameters each model accepts. Call this before media_generate_image when no model is known.',
+    description: 'List the image or video generation models available through the providers configured in DeepSeek Harness, '
+      + 'with the parameters each model accepts. Call this before media_generate_image or media_generate_video when no model is known.',
     parameters: {
+      kind: { type: 'string', enum: ['image', 'video'], description: 'Which models to list (default image).' },
       provider: { type: 'string', description: 'DSH provider id; omit to list every media-capable provider.' },
       refresh: { type: 'boolean', description: 'Bypass the cached listing.' },
     },
@@ -73,9 +93,38 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     async execute(args, exec) {
       const providers = args.provider === undefined ? service.bridge.listProviders() : [service.bridge.pick(args.provider)]
       if (providers.length === 0) service.bridge.pick()
+      const options = { refresh: args.refresh === true, signal: exec.signal }
+      const settings = service.settings()
+      if (args.kind === 'video') {
+        const out = []
+        for (const provider of providers) {
+          const snapshot = await service.videoModels(provider, options)
+          out.push({
+            provider: provider.id,
+            name: provider.name,
+            stale: snapshot.stale,
+            videoModels: snapshot.models.map(m => ({
+              id: m.id,
+              name: m.name,
+              ...m.description === undefined ? {} : { description: m.description.slice(0, 300) },
+              ...m.durations === undefined ? {} : { durations: [...m.durations] },
+              ...m.resolutions === undefined ? {} : { resolutions: [...m.resolutions] },
+              ...m.aspectRatios === undefined ? {} : { aspectRatios: [...m.aspectRatios] },
+              ...m.audio === undefined ? {} : { audio: m.audio },
+              ...m.seed === undefined ? {} : { seed: m.seed },
+              pricingUsd: { ...m.pricingSkus },
+            })),
+          })
+        }
+        return {
+          providers: out,
+          defaults: { provider: settings.defaultVideoProvider ?? null, videoModel: settings.defaultVideoModel ?? null },
+          limits: { maxVideoSeconds: settings.maxVideoSeconds },
+        }
+      }
       const out = []
       for (const provider of providers) {
-        const snapshot = await service.imageModels(provider, { refresh: args.refresh === true, signal: exec.signal })
+        const snapshot = await service.imageModels(provider, options)
         out.push({
           provider: provider.id,
           name: provider.name,
@@ -90,10 +139,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       }
       return {
         providers: out,
-        defaults: {
-          provider: service.settings().defaultImageProvider ?? null,
-          imageModel: service.settings().defaultImageModel ?? null,
-        },
+        defaults: { provider: settings.defaultImageProvider ?? null, imageModel: settings.defaultImageModel ?? null },
       }
     },
   }))
@@ -141,6 +187,93 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
         attachmentFailures,
       }
       return value as never
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: TOOL_GENERATE_VIDEO,
+    description: 'Start generating a video from a text prompt with a video model of a configured provider. '
+      + 'Generation runs in the background and can take minutes; this returns a job id at once, and the session is '
+      + 'notified when the video is saved under the working directory. Each call may cost money, so do not call it '
+      + 'repeatedly without the user asking, and do not poll the job. Use media_list_models with kind "video" to find '
+      + 'model ids and the durations, resolutions, and aspect ratios a model accepts.',
+    parameters: {
+      prompt: { type: 'string', required: true, description: 'What the video shows. Pass the user\'s wording; do not translate it unless asked.' },
+      model: { type: 'string', description: 'Video model id from media_list_models; omit to use the configured default.' },
+      provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
+      duration: { type: 'integer', description: 'Length in seconds, one the model lists.' },
+      resolution: { type: 'string', description: 'Resolution such as 720p or 1080p, if the model lists it.' },
+      aspect_ratio: { type: 'string', description: 'Aspect ratio such as 16:9, if the model lists it.' },
+      generate_audio: { type: 'boolean', description: 'Generate an audio track, if the model can.' },
+      seed: { type: 'integer', description: 'Seed for reproducible output, if the model supports it.' },
+    },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [{ type: 'text', text: describeJob(value as unknown as VideoJobRecord) }],
+    },
+    async execute(args, exec) {
+      const plan = await service.planVideo(args, exec.signal)
+      const cwd = await workingDirectory(ctx, exec)
+      const dir = resolveOutputDir(cwd, config.outputDir)
+      const watcher = await config.videoJobs
+      const state = await service.submitVideo(plan, args.prompt, exec.signal)
+      const now = new Date()
+      const estimate = service.estimateVideo(plan)
+      const sessionId = sessionIdOf(exec)
+      const record: VideoJobRecord = {
+        id: state.id,
+        providerId: plan.provider.id,
+        model: plan.model.id,
+        modelName: plan.model.name,
+        prompt: args.prompt.slice(0, PROMPT_EXCERPT),
+        params: plan.params,
+        ...sessionId === undefined ? {} : { sessionId },
+        dir,
+        status: state.status,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        watchUntil: new Date(now.getTime() + config.maxWatchMs()).toISOString(),
+        ...estimate === undefined ? {} : { estimate },
+        outputs: state.outputs,
+        files: [],
+        delivered: false,
+        failures: 0,
+      }
+      // The job is already billed at the provider, so a storage failure must not hide its id.
+      try {
+        await watcher.add(record)
+      } catch (error) {
+        return { ...record, status: 'stopped', error: `the job could not be recorded for watching: ${String(error)}` } as never
+      }
+      return record as never
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: TOOL_VIDEO_STATUS,
+    description: 'Show video jobs started with media_generate_video. With job_id, checks that job with the provider now '
+      + '(also one whose watching stopped) and saves the video if it is finished; without it, lists this session\'s jobs. '
+      + 'Finished jobs are reported automatically, so call this only when the user asks.',
+    parameters: {
+      job_id: { type: 'string', description: 'Job id returned by media_generate_video.' },
+    },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => {
+        const jobs = (value as unknown as { jobs: VideoJobRecord[] }).jobs
+        return [{ type: 'text', text: jobs.length === 0 ? 'No video jobs.' : jobs.map(describeJob).join('\n\n') }]
+      },
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const watcher = await config.videoJobs
+      if (args.job_id !== undefined) return { jobs: [await watcher.check(args.job_id, exec.signal)] } as never
+      const sessionId = sessionIdOf(exec)
+      const jobs = watcher.store.list()
+        .filter(job => sessionId === undefined || job.sessionId === sessionId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, STATUS_LIMIT)
+      return { jobs } as never
     },
   }))
 }

@@ -32,7 +32,7 @@ function service(settings: Partial<ServiceSettings> = {}, body: Record<string, u
   })
   const factory = (provider: { baseURL: string }, apiKey: string, timeoutMs: number) =>
     new OpenRouterAdapter({ baseURL: provider.baseURL, apiKey, timeoutMs, fetch: fetchImpl })
-  const svc = new MediaService(bridge, () => ({ maxImagesPerCall: 4, ...settings }), { catalogTtlMs: 60_000, requestTimeoutMs: 1000 }, factory)
+  const svc = new MediaService(bridge, () => ({ maxImagesPerCall: 4, maxVideoSeconds: 10, ...settings }), { catalogTtlMs: 60_000, requestTimeoutMs: 1000 }, factory)
   return { svc, requests, factory }
 }
 
@@ -61,7 +61,7 @@ describe('MediaService', () => {
   it('reads live settings on every plan', async () => {
     let model: string | undefined
     const { svc, factory } = service()
-    const live = new MediaService(svc.bridge, () => ({ maxImagesPerCall: 4, defaultImageModel: model }), { catalogTtlMs: 1, requestTimeoutMs: 1000 }, factory)
+    const live = new MediaService(svc.bridge, () => ({ maxImagesPerCall: 4, maxVideoSeconds: 10, defaultImageModel: model }), { catalogTtlMs: 1, requestTimeoutMs: 1000 }, factory)
     await expect(live.plan({ prompt: 'x' })).rejects.toMatchObject({ code: 'NO_MODEL' })
     model = 'g/img'
     expect((await live.plan({ prompt: 'x' })).model.id).toBe('g/img')

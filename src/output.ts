@@ -60,7 +60,8 @@ export function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 48) || 'image'
 }
 
-function timestamp(date: Date): string {
+/** Local `YYYYMMDD-HHMMSS` stamp used in output file names. */
+export function timestamp(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
 }
