@@ -18,5 +18,6 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests"],
+  "exclude": ["src/client", "tests/client"]
 }

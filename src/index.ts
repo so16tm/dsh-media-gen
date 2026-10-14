@@ -17,6 +17,7 @@ import {
 import {
   MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaModelCommand, type SessionModelStore,
 } from './session-models.ts'
+import { registerRoutes, type FetchRegistry } from './routes.ts'
 import type { StorageDomainService } from './storage.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
@@ -218,6 +219,10 @@ export function apply(ctx: Context, config: Config): void {
           runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal),
       })
     })
+
+  // Model lists and session choices for the browser half's pickers.
+  ;(ctx as unknown as { inject(deps: string[], fn: (c: { connection: { fetch: FetchRegistry } }) => void): void })
+    .inject(['connection'], (c) => { registerRoutes(c.connection.fetch, service, sessionModels) })
 
   registerTools(ctx, service, {
     outputDir: config.outputDir,
