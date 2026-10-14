@@ -60,10 +60,10 @@ function SettingsPage({ form, t }: Extract<ConfigViewProps, { view: 'page' }>): 
   const [failed, setFailed] = useState(false)
   const value = form.state.value ?? {}
   const disabled = !form.state.writable || form.state.status !== 'ready'
-  const write = (field: string, next: unknown): void => {
+  const write = (field: string, next: unknown): Promise<boolean> => {
     const op = next === undefined || next === '' ? { op: 'unset' as const, path: [field] } : { op: 'set' as const, path: [field], value: next }
     setFailed(false)
-    form.mutate([op], form.state.revision).then(ok => { setFailed(!ok) }, () => { setFailed(true) })
+    return form.mutate([op], form.state.revision).then((ok) => { setFailed(!ok); return ok }, () => { setFailed(true); return false })
   }
   const row: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 0' }
   const number = (field: string, min: number, max: number) => (
@@ -81,9 +81,9 @@ function SettingsPage({ form, t }: Extract<ConfigViewProps, { view: 'page' }>): 
       <ModelRow kind="image" label={t('imageModel')} current={value.defaultImageModel} disabled={disabled} t={t} onChange={id => { write('defaultImageModel', id) }} />
       <ModelRow kind="video" label={t('videoModel')} current={value.defaultVideoModel} disabled={disabled} t={t} onChange={id => { write('defaultVideoModel', id) }} />
       <ChatModelsRow kind="image" label={t('chatImageModels')} current={value.chatImageModels} disabled={disabled} t={t}
-        onChange={ids => { write('chatImageModels', ids.length === 0 ? undefined : ids) }} />
+        onChange={ids => write('chatImageModels', ids.length === 0 ? undefined : ids)} />
       <ChatModelsRow kind="video" label={t('chatVideoModels')} current={value.chatVideoModels} disabled={disabled} t={t}
-        onChange={ids => { write('chatVideoModels', ids.length === 0 ? undefined : ids) }} />
+        onChange={ids => write('chatVideoModels', ids.length === 0 ? undefined : ids)} />
       <label style={row}>{t('maxImagesPerCall')}{number('maxImagesPerCall', 1, 10)}</label>
       <label style={row}>{t('maxVideoSeconds')}{number('maxVideoSeconds', 1, 120)}</label>
       <label style={row}>{t('requireApproval')}{flag('requireApproval')}</label>
@@ -120,17 +120,27 @@ function ModelRow(props: { kind: MediaKind; label: string; current: unknown; dis
  * Choose which models the chat input offers. Nothing checked offers every
  * listed model; a search box narrows long provider listings.
  */
-function ChatModelsRow(props: { kind: MediaKind; label: string; current: unknown; disabled: boolean; t: Translate; onChange(ids: string[]): void }): ReactNode {
+function ChatModelsRow(props: { kind: MediaKind; label: string; current: unknown; disabled: boolean; t: Translate; onChange(ids: string[]): Promise<boolean> }): ReactNode {
   const { listing, error } = useListing(props.kind)
   const [query, setQuery] = useState('')
   const [onlyChecked, setOnlyChecked] = useState(false)
-  const checked = Array.isArray(props.current) ? props.current.filter((id): id is string => typeof id === 'string') : []
+  // A click shows at once and stays until the form reports the same list saved.
+  const [pending, setPending] = useState<string[]>()
+  const saved = Array.isArray(props.current) ? props.current.filter((id): id is string => typeof id === 'string') : []
+  const savedKey = saved.join('\n')
+  useEffect(() => { setPending(p => (p !== undefined && p.join('\n') === savedKey ? undefined : p)) }, [savedKey])
+  const checked = pending ?? saved
   const needle = query.trim().toLowerCase()
   const models = optionsOf(listing, undefined)
     .filter(m => !onlyChecked || checked.includes(m.id))
     .filter(m => needle === '' || m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle))
+  const change = (ids: string[]) => {
+    setPending(ids)
+    // A refused write puts the saved value back on screen.
+    void props.onChange(ids).then((ok) => { if (!ok) setPending(undefined) })
+  }
   const toggle = (id: string, on: boolean) => {
-    props.onChange(on ? [...checked, id] : checked.filter(other => other !== id))
+    change(on ? [...checked, id] : checked.filter(other => other !== id))
   }
   return (
     <div style={{ padding: '8px 0' }}>
@@ -151,7 +161,7 @@ function ChatModelsRow(props: { kind: MediaKind; label: string; current: unknown
                 <input type="checkbox" checked={onlyChecked} onChange={(e) => { setOnlyChecked(e.target.checked) }} />
                 {props.t('chatModelsOnlyChecked')}
               </label>
-              <button type="button" disabled={props.disabled || checked.length === 0} onClick={() => { props.onChange([]) }}
+              <button type="button" disabled={props.disabled || checked.length === 0} onClick={() => { change([]) }}
                 style={{ ...selectStyle, cursor: 'pointer' }}>{props.t('chatModelsClear')}</button>
             </div>
             <div role="group" aria-label={props.label}
