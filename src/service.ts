@@ -153,10 +153,14 @@ export class MediaService {
     if (count * (1 + variations.length) > settings.maxImagesPerCall) {
       throw new MediaError('LIMIT_EXCEEDED', `${1 + variations.length} images exceed the configured limit of ${settings.maxImagesPerCall} images per call`)
     }
-    if (count > 1 && VARIANT_LIST.test(args.prompt)) {
-      throw new MediaError('INVALID_REQUEST', 'count makes copies of this one prompt, and a prompt that lists several different '
-        + 'images yields a collage in each copy; for images that differ, set prompt to the first image only and put each '
-        + 'other image\'s complete prompt in variations, with count 1')
+    // A prompt that lists several images yields one collage per request, so every prompt must describe one image.
+    const listing = [args.prompt, ...variations].findIndex(p => VARIANT_LIST.test(p))
+    if (listing >= 0 && (count > 1 || variations.length > 0)) {
+      throw new MediaError('INVALID_REQUEST', `${listing === 0 ? 'prompt' : `variations[${listing - 1}]`} lists several different `
+        + 'images, and each request then returns one collage. Rewrite it so that each prompt describes exactly one image: '
+        + 'prompt is image 1 only (for example only the first pose, with no mention of other poses or of how many images), and '
+        + 'variations holds images 2 to N, one complete prompt each, so N images means N - 1 variations. Set count to 1. '
+        + 'Do not add images beyond what the user asked for.')
     }
     const inputs = inputPaths(args.input_images, 'input_images')
     if (inputs.length > 0) {

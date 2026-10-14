@@ -40,7 +40,9 @@ const MODEL_GUIDE = 'Omit model to use the model the user selected; the selectio
 /** Generation is billed, so a finished call is never followed by another on the agent's own judgment. */
 const ONCE_GUIDE = 'Make only the generations the user asked for, in one call. When they ask for several images that differ '
   + '(for example three poses), write prompt for the first image only and put each other image\'s complete prompt in '
-  + 'variations; never list the variants in one prompt, which yields a collage. Use count only for copies of one prompt. '
+  + 'variations; never list the variants in one prompt, which yields a collage. Example for three poses of a white cat: '
+  + 'prompt "a white cat sitting, ...", variations ["a white cat stretching, ...", "a white cat jumping, ..."], no count. '
+  + 'Use count only for copies of one prompt. '
   + 'Once you have what you need, call the tool in the same turn instead of announcing it and stopping. Never make more than asked. Once '
   + 'those return, do not call again on your own to retry, improve, fix, or vary the results, even if they miss the request: '
   + 'show them, say what differs, and let the user decide.'
@@ -196,8 +198,9 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       count: { type: 'integer', description: 'Copies of this same prompt (default 1). For images that differ, use variations instead.' },
       variations: {
         type: 'array', items: { type: 'string' },
-        description: 'Complete prompts for further images that differ from the first (another pose, angle, or scene), one '
-          + 'per image; prompt describes the first image only. The call makes 1 + variations images, one request each.',
+        description: 'For N differing images (another pose, angle, or scene): N - 1 complete prompts for images 2 to N, one '
+          + 'image each. prompt then describes image 1 only, never the others or how many there are. The call makes '
+          + '1 + variations images, one request each.',
       },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
       resolution: { type: 'string', description: 'Resolution tier such as 1K or 2K, if the model accepts it.' },

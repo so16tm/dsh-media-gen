@@ -89,6 +89,9 @@ describe('image variations', () => {
     await expect(svc.plan({ prompt: 'white cat, three different poses: standing, sitting', count: 3 })).rejects.toThrow('variations')
     await expect(svc.plan({ prompt: '白い猫、それぞれ違うポーズ', count: 3 })).rejects.toThrow('variations')
     expect((await svc.plan({ prompt: 'a white cat', count: 3 })).count).toBe(3)
+    await expect(svc.plan({ prompt: 'white cat in three different poses', variations: ['a cat sitting', 'a cat lying'] }))
+      .rejects.toThrow('prompt is image 1 only')
+    await expect(svc.plan({ prompt: 'a cat sitting', variations: ['a cat in various poses'] })).rejects.toThrow('variations[0]')
   })
 
   it('sends one request per prompt and saves every image', async () => {
