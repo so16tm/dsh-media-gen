@@ -27,6 +27,8 @@ export interface MediaToolViewProps {
   toolName: string
   block: ToolBlock
   openFile(path: string): void
+  /** Chat-supplied, session-authorized loader for an image attachment of the result. */
+  loadImage?: (attachment: unknown) => Promise<string>
   t: Translate
 }
 
@@ -68,15 +70,37 @@ function Prompt(props: { text: string | undefined; t: Translate }): ReactNode {
   )
 }
 
+/**
+ * One saved image. Files saved before the plugin kept its file index are not
+ * served by the file route, so a failed load falls back to the result's
+ * attachment through the chat's own loader.
+ */
+function Thumb(props: { path: string; attachment: unknown; loadImage?: MediaToolViewProps['loadImage']; alt: string }): ReactNode {
+  const [src, setSrc] = useState(fileUrl(props.path))
+  const [fellBack, setFellBack] = useState(false)
+  const fallback = (): void => {
+    if (fellBack || props.attachment === undefined || props.loadImage === undefined) return
+    setFellBack(true)
+    props.loadImage(props.attachment).then(setSrc, () => {})
+  }
+  return <img src={src} alt={props.alt} loading="lazy" style={mediaStyle} onError={fallback} />
+}
+
 /** Thumbnails of saved images; a click opens the file in DSH's preview, or the image itself. */
-function Images(props: { paths: readonly string[]; open?: ((path: string) => void) | undefined; t: Translate }): ReactNode {
+function Images(props: {
+  paths: readonly string[]
+  attachments: readonly unknown[]
+  loadImage?: MediaToolViewProps['loadImage']
+  open?: ((path: string) => void) | undefined
+  t: Translate
+}): ReactNode {
   if (props.paths.length === 0) return null
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '6px 0' }}>
-      {props.paths.map(path => (
+      {props.paths.map((path, index) => (
         <a key={path} href={fileUrl(path)} target="_blank" rel="noreferrer" title={path}
           onClick={(e) => { if (props.open !== undefined) { e.preventDefault(); props.open(path) } }}>
-          <img src={fileUrl(path)} alt={props.t('generatedImageAlt')} loading="lazy" style={mediaStyle} />
+          <Thumb path={path} attachment={props.attachments[index]} loadImage={props.loadImage} alt={props.t('generatedImageAlt')} />
         </a>
       ))}
     </div>
@@ -132,6 +156,13 @@ function JobVideo(props: { jobId: string; t: Translate }): ReactNode {
 }
 
 /** Row of `media_generate_image` and `media_generate_video` calls. */
+/** Image attachments of a result, in order. */
+function attachmentsOf(content: readonly unknown[] | undefined): unknown[] {
+  return (content ?? [])
+    .filter((block): block is { type: 'image'; attachment: unknown } => (block as { type?: unknown }).type === 'image')
+    .map(block => block.attachment)
+}
+
 export function MediaToolView(props: MediaToolViewProps): ReactNode {
   const { t, block } = props
   const video = props.toolName === 'media_generate_video'
@@ -158,7 +189,7 @@ export function MediaToolView(props: MediaToolViewProps): ReactNode {
       <Head title={title} detail={typeof model === 'string' ? model : undefined} />
       {video
         ? jobId === undefined ? null : <JobVideo jobId={jobId} t={t} />
-        : <Images paths={imagesOf(block.meta, text)} open={props.openFile} t={t} />}
+        : <Images paths={imagesOf(block.meta, text)} attachments={attachmentsOf(block.content)} loadImage={props.loadImage} open={props.openFile} t={t} />}
       <Prompt text={prompt} t={t} />
     </div>
   )
@@ -180,7 +211,7 @@ export function MediaCommandView(props: MediaCommandViewProps): ReactNode {
     <div>
       <Head title={line} />
       {images.length > 0
-        ? <Images paths={images} t={t} />
+        ? <Images paths={images} attachments={[]} t={t} />
         : jobId !== undefined
           ? <JobVideo jobId={jobId} t={t} />
           : <p style={{ whiteSpace: 'pre-wrap', margin: '2px 0', fontSize: 13, color: 'var(--dsw-alias-label-secondary)' }}>{text}</p>}
