@@ -43,6 +43,13 @@ export interface ImageRequest {
   prompt: string
   /** Optional parameters; only those the model supports are sent. */
   params: Readonly<Record<string, string | number | boolean>>
+  /** Reference images as data or HTTP(S) URLs, sent as `input_references`. */
+  inputReferences?: readonly string[]
+}
+
+/** Content parts of `input_references`. */
+export function imageParts(urls: readonly string[]): { type: 'image_url'; image_url: { url: string } }[] {
+  return urls.map(url => ({ type: 'image_url', image_url: { url } }))
 }
 
 /** One generated image. */
@@ -218,7 +225,10 @@ export class OpenRouterAdapter {
    * already be billed is never retried automatically.
    */
   async generateImage(request: ImageRequest, signal?: AbortSignal): Promise<ImageResult> {
-    const body = await this.request('POST', '/images', { model: request.model, prompt: request.prompt, ...request.params }, signal)
+    const body = await this.request('POST', '/images', {
+      model: request.model, prompt: request.prompt, ...request.params,
+      ...request.inputReferences === undefined || request.inputReferences.length === 0 ? {} : { input_references: imageParts(request.inputReferences) },
+    }, signal)
     if (!isRecord(body) || !Array.isArray(body.data)) {
       throw new MediaError('INVALID_RESPONSE', 'the provider returned no image data')
     }
@@ -231,7 +241,9 @@ export class OpenRouterAdapter {
     }
     if (images.length === 0) throw new MediaError('INVALID_RESPONSE', 'the provider returned no decodable image')
     const usage = isRecord(body.usage) ? body.usage : {}
-    const cost = typeof usage.cost === 'number' && Number.isFinite(usage.cost) ? usage.cost : null
+    // Some responses carry the cost as a decimal string.
+    const raw = typeof usage.cost === 'string' && usage.cost.trim() !== '' ? Number(usage.cost) : usage.cost
+    const cost = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
     return { images, costUsd: cost }
   }
 
@@ -245,7 +257,15 @@ export class OpenRouterAdapter {
    * never retried automatically.
    */
   async submitVideo(request: VideoRequest, signal?: AbortSignal): Promise<VideoJobState> {
-    const body = await this.request('POST', '/videos', { model: request.model, prompt: request.prompt, ...request.params }, signal)
+    const frames = request.frameImages ?? []
+    const references = request.inputReferences ?? []
+    const body = await this.request('POST', '/videos', {
+      model: request.model, prompt: request.prompt, ...request.params,
+      ...frames.length === 0 ? {} : {
+        frame_images: frames.map(f => ({ type: 'image_url', image_url: { url: f.url }, frame_type: f.frameType })),
+      },
+      ...references.length === 0 ? {} : { input_references: imageParts(references) },
+    }, signal)
     const state = parseVideoJob(body)
     if (state === undefined) throw new MediaError('INVALID_RESPONSE', 'the provider accepted the video request but returned no job id')
     return state

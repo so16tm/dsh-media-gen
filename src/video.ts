@@ -20,6 +20,8 @@ export interface VideoModel {
   audio?: boolean
   /** Whether a seed is honored; undefined when the listing does not say. */
   seed?: boolean
+  /** Frames an image can fix (`first_frame`, `last_frame`); undefined when the listing does not say. */
+  frameImages?: readonly string[]
   /** Price per SKU in USD, with provider-specific SKU names. */
   pricingSkus: Readonly<Record<string, number>>
 }
@@ -29,6 +31,10 @@ export interface VideoRequest {
   model: string
   prompt: string
   params: Readonly<Record<string, string | number | boolean>>
+  /** Images fixing the first or last frame, as data or HTTP(S) URLs. */
+  frameImages?: readonly { url: string; frameType: 'first_frame' | 'last_frame' }[]
+  /** Reference images guiding the video, as data or HTTP(S) URLs. */
+  inputReferences?: readonly string[]
 }
 
 /** Provider job states; the last four are terminal. */
@@ -62,6 +68,12 @@ export interface VideoArgs {
   aspect_ratio?: string | undefined
   generate_audio?: boolean | undefined
   seed?: number | undefined
+  /** Image fixing the first frame: a path in the working directory. */
+  first_frame?: string | undefined
+  /** Image fixing the last frame. */
+  last_frame?: string | undefined
+  /** Images guiding the look without fixing a frame. */
+  reference_images?: string[] | undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,13 +92,17 @@ function flag(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
 
+/** SKU names whose price is in US cents. */
+const CENTS_SKU = /(?:^|_)cents?(?:_|$)/u
+
 /** Parse `pricing_skus`, whose values are decimal strings; unparsable entries are dropped. */
 export function parsePricingSkus(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {}
   if (!isRecord(raw)) return out
   for (const [sku, value] of Object.entries(raw)) {
     const price = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
-    if (Number.isFinite(price) && price >= 0) out[sku] = price
+    // Some SKUs are priced in cents (`cents_per_video_output_second_480p`); the rest are in USD.
+    if (Number.isFinite(price) && price >= 0) out[sku] = CENTS_SKU.test(sku.toLowerCase()) ? price / 100 : price
   }
   return out
 }
@@ -107,6 +123,7 @@ export function parseVideoModels(body: unknown): VideoModel[] {
     const durations = numberList(entry.supported_durations)
     const audio = flag(entry.generate_audio)
     const seed = flag(entry.seed)
+    const frameImages = stringList(entry.supported_frame_images)
     out.push({
       id: entry.id,
       name: typeof entry.name === 'string' && entry.name.length > 0 ? entry.name : entry.id,
@@ -117,6 +134,7 @@ export function parseVideoModels(body: unknown): VideoModel[] {
       ...durations === undefined ? {} : { durations },
       ...audio === undefined ? {} : { audio },
       ...seed === undefined ? {} : { seed },
+      ...frameImages === undefined ? {} : { frameImages },
       pricingSkus: parsePricingSkus(entry.pricing_skus),
     })
   }
@@ -180,6 +198,32 @@ export function validateVideoParams(model: VideoModel, args: VideoArgs): Record<
   return out
 }
 
+/** The input images of one video, checked against the model before anything is read. */
+export interface VideoInputs {
+  first?: string
+  last?: string
+  references: string[]
+}
+
+/**
+ * Check a video's input images against the listing. A model whose listing
+ * names no frame support is refused frames; one that says nothing is let
+ * through and the provider decides.
+ * @throws MediaError UNSUPPORTED_PARAMETER for a frame the model cannot take.
+ */
+export function validateVideoInputs(model: VideoModel, args: VideoArgs, references: string[]): VideoInputs {
+  const first = args.first_frame?.trim() || undefined
+  const last = args.last_frame?.trim() || undefined
+  for (const [frame, value] of [['first_frame', first], ['last_frame', last]] as const) {
+    if (value !== undefined && model.frameImages !== undefined && !model.frameImages.includes(frame)) {
+      throw new MediaError('UNSUPPORTED_PARAMETER', model.frameImages.length === 0
+        ? `model "${model.id}" does not take input images as frames`
+        : `model "${model.id}" takes ${model.frameImages.join(', ')} images; not ${frame}`)
+    }
+  }
+  return { ...first === undefined ? {} : { first }, ...last === undefined ? {} : { last }, references }
+}
+
 /** Approximate price of one job; a range when the SKUs leave the tier open. */
 export interface CostRange {
   min: number
@@ -197,27 +241,35 @@ const RESOLUTION_TOKEN = /(?:^|[^a-z0-9])(360p|480p|720p|768p|1080p|1k|2k|4k)(?:
  * @param model - the model listing.
  * @param duration - requested seconds; when absent, the model's duration range is used.
  * @param resolution - requested resolution, if any.
+ * @param inputImages - input images sent, billed by models with a per-image SKU.
  */
-export function estimateVideoCost(model: VideoModel, duration?: number, resolution?: string): CostRange | undefined {
+export function estimateVideoCost(model: VideoModel, duration?: number, resolution?: string, inputImages = 0): CostRange | undefined {
   const wanted = resolution?.toLowerCase()
   const perSecond: number[] = []
   const perVideo: number[] = []
+  let perInput = 0
   for (const [sku, price] of Object.entries(model.pricingSkus)) {
     const name = sku.toLowerCase()
+    // An SKU billed per input image adds to every shape below.
+    if (/input_?image|image_?input|reference_?image/u.test(name)) {
+      perInput = Math.max(perInput, price)
+      continue
+    }
     const tier = RESOLUTION_TOKEN.exec(name)?.[1]
     if (tier !== undefined && wanted !== undefined && tier !== wanted) continue
     if (/sec(?:ond)?s?(?![a-z])|per_s(?![a-z])/u.test(name)) perSecond.push(price)
     else if (/generat|video|request|clip|output/u.test(name)) perVideo.push(price)
   }
+  const inputs = perInput * inputImages
   if (perSecond.length > 0) {
     const seconds = duration !== undefined ? [duration] : model.durations ?? []
     if (seconds.length === 0) return undefined
     return {
-      min: Math.min(...perSecond) * Math.min(...seconds),
-      max: Math.max(...perSecond) * Math.max(...seconds),
+      min: Math.min(...perSecond) * Math.min(...seconds) + inputs,
+      max: Math.max(...perSecond) * Math.max(...seconds) + inputs,
     }
   }
-  if (perVideo.length > 0) return { min: Math.min(...perVideo), max: Math.max(...perVideo) }
+  if (perVideo.length > 0) return { min: Math.min(...perVideo) + inputs, max: Math.max(...perVideo) + inputs }
   return undefined
 }
 

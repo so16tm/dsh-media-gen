@@ -7,9 +7,12 @@
 
 import { CapabilityCatalog, estimateImageCost, type CatalogSnapshot } from './catalog.ts'
 import { MediaError } from './errors.ts'
+import { inputPaths, type InputImage } from './input-images.ts'
 import { OpenRouterAdapter, validateParams, type ImageModel, type ImageResult } from './openrouter.ts'
 import type { MediaProvider, ProviderBridge } from './provider-bridge.ts'
-import { estimateVideoCost, validateVideoParams, type CostRange, type VideoArgs, type VideoJobState, type VideoModel } from './video.ts'
+import {
+  estimateVideoCost, validateVideoInputs, validateVideoParams, type CostRange, type VideoArgs, type VideoInputs, type VideoJobState, type VideoModel,
+} from './video.ts'
 
 /** Live settings, read again on every use. */
 export interface ServiceSettings {
@@ -37,7 +40,17 @@ export interface ImageArgs {
   aspect_ratio?: string | undefined
   resolution?: string | undefined
   seed?: number | undefined
+  /** Reference images: paths in the working directory. */
+  input_images?: string[] | undefined
+  /** Prompts of further images that differ from the first, one complete prompt each. */
+  variations?: string[] | undefined
 }
+
+/**
+ * A prompt that asks for several different images at once, which `count`
+ * turns into copies of one collage. English and Japanese wording.
+ */
+const VARIANT_LIST = /\b(?:different|various|varied|several|multiple|three|four|five)\s+(?:poses?|angles?|styles?|outfits?|expressions?|scenes?|views?|actions?|positions?)\b|\bcollage\b|\bgrid of\b|\b[2-9]\s?x\s?[2-9]\b|(?:^|\s)[1-9][).]\s|(?:違う|異なる|別々の|いろいろな|様々な|さまざまな)(?:\s|の)*(?:ポーズ|角度|アングル|表情|服装|衣装|シーン|場面|構図|スタイル|動き|姿勢)|コラージュ|[2-9２-９]\s*(?:枚|コマ)の?(?:画像|写真|イラスト|絵|カット)/iu
 
 /** A fully resolved generation plan, computed before anything is billed. */
 export interface ImagePlan {
@@ -45,6 +58,10 @@ export interface ImagePlan {
   model: ImageModel
   count: number
   params: Record<string, string | number | boolean>
+  /** Reference image paths, read when the plan runs. */
+  inputs: string[]
+  /** Prompts of further images, generated after the first prompt's. */
+  variations: string[]
   /** True when the model listing could not be refreshed. */
   staleCatalog: boolean
 }
@@ -54,7 +71,21 @@ export interface VideoPlan {
   provider: MediaProvider
   model: VideoModel
   params: Record<string, string | number | boolean>
+  /** Input image paths, read when the job is submitted. */
+  inputs: VideoInputs
   staleCatalog: boolean
+}
+
+/** A video's input images once read. */
+export interface LoadedVideoInputs {
+  first?: InputImage
+  last?: InputImage
+  references: InputImage[]
+}
+
+/** Number of input images a video sends. */
+export function videoInputCount(inputs: VideoInputs): number {
+  return (inputs.first === undefined ? 0 : 1) + (inputs.last === undefined ? 0 : 1) + inputs.references.length
 }
 
 /** Factory for adapters; replaced in tests. */
@@ -115,7 +146,34 @@ export class MediaService {
       // models that do not declare it still work.
       n: count > 1 ? count : undefined,
     })
-    return { provider, model, count, params, staleCatalog: snapshot.stale }
+    const variations = (args.variations ?? []).map(v => v.trim()).filter(v => v.length > 0)
+    if (variations.length > 0 && count > 1) {
+      throw new MediaError('INVALID_REQUEST', 'use either count (copies of one prompt) or variations (one prompt per differing image), not both')
+    }
+    if (count * (1 + variations.length) > settings.maxImagesPerCall) {
+      throw new MediaError('LIMIT_EXCEEDED', `${1 + variations.length} images exceed the configured limit of ${settings.maxImagesPerCall} images per call`)
+    }
+    // A prompt that lists several images yields one collage per request, so every prompt must describe one image.
+    const listing = [args.prompt, ...variations].findIndex(p => VARIANT_LIST.test(p))
+    if (listing >= 0 && (count > 1 || variations.length > 0)) {
+      throw new MediaError('INVALID_REQUEST', `prompt ${listing + 1} describes several different images, and each request `
+        + 'then returns one collage. Nothing was generated. Send one prompt per image instead: each describes exactly one '
+        + 'image (one pose, angle, or scene) and never mentions the others or how many there are, so N images means N '
+        + 'prompts. Do not add images beyond what the user asked for.')
+    }
+    const inputs = inputPaths(args.input_images, 'input_images')
+    if (inputs.length > 0) {
+      if (model.inputModalities.length > 0 && !model.inputModalities.includes('image')) {
+        throw new MediaError('UNSUPPORTED_PARAMETER', `model "${model.id}" does not take input images`)
+      }
+      const limit = model.parameters.input_references
+      if (limit?.kind === 'range' && limit.max !== undefined && inputs.length > limit.max) {
+        throw new MediaError('UNSUPPORTED_PARAMETER', limit.max === 0
+          ? `model "${model.id}" does not take input images`
+          : `model "${model.id}" takes at most ${limit.max} input images; got ${inputs.length}`)
+      }
+    }
+    return { provider, model, count, params, inputs, variations, staleCatalog: snapshot.stale }
   }
 
   /** Estimate the plan's cost in USD; undefined when it cannot be estimated. */
@@ -123,13 +181,15 @@ export class MediaService {
     const lines = await this.catalog.imagePricing(plan.provider.id, plan.model.id,
       async (id, s) => (await this.adapter(plan.provider)).getImagePricing(id, s), signal)
     const resolution = typeof plan.params.resolution === 'string' ? plan.params.resolution : undefined
-    return estimateImageCost(lines, plan.count, resolution)
+    return estimateImageCost(lines, plan.count * (1 + plan.variations.length), resolution)
   }
 
   /** Run one planned generation. Sent once; never retried. */
-  async generate(plan: ImagePlan, prompt: string, signal?: AbortSignal): Promise<ImageResult> {
+  async generate(plan: ImagePlan, prompt: string, signal?: AbortSignal, inputs: readonly InputImage[] = []): Promise<ImageResult> {
     const adapter = await this.adapter(plan.provider)
-    return adapter.generateImage({ model: plan.model.id, prompt, params: plan.params }, signal)
+    return adapter.generateImage({
+      model: plan.model.id, prompt, params: plan.params, ...inputs.length === 0 ? {} : { inputReferences: inputs.map(i => i.dataUrl) },
+    }, signal)
   }
 
   /** List video models of one provider through the cache. */
@@ -163,20 +223,36 @@ export class MediaService {
       && Math.min(...model.durations) > settings.maxVideoSeconds) {
       throw new MediaError('LIMIT_EXCEEDED', `every duration model "${model.id}" offers exceeds the configured limit of ${settings.maxVideoSeconds} s`)
     }
-    return { provider, model, params: validateVideoParams(model, args), staleCatalog: snapshot.stale }
+    // When the model could pick a length above the limit, ask for the longest one within it.
+    const offered = model.durations ?? []
+    const within = offered.filter(d => d <= settings.maxVideoSeconds)
+    const capped = args.duration === undefined && within.length > 0 && within.length < offered.length
+      ? { ...args, duration: Math.max(...within) }
+      : args
+    const inputs = validateVideoInputs(model, capped, inputPaths(capped.reference_images, 'reference_images'))
+    return { provider, model, params: validateVideoParams(model, capped), inputs, staleCatalog: snapshot.stale }
   }
 
   /** Approximate the plan's cost; undefined when the SKUs cannot be read. */
   estimateVideo(plan: VideoPlan): CostRange | undefined {
     const duration = typeof plan.params.duration === 'number' ? plan.params.duration : undefined
     const resolution = typeof plan.params.resolution === 'string' ? plan.params.resolution : undefined
-    return estimateVideoCost(plan.model, duration, resolution)
+    return estimateVideoCost(plan.model, duration, resolution, videoInputCount(plan.inputs))
   }
 
   /** Submit one planned video job. Sent once; never retried. */
-  async submitVideo(plan: VideoPlan, prompt: string, signal?: AbortSignal): Promise<VideoJobState> {
+  async submitVideo(plan: VideoPlan, prompt: string, signal?: AbortSignal, inputs?: LoadedVideoInputs): Promise<VideoJobState> {
     const adapter = await this.adapter(plan.provider)
-    return adapter.submitVideo({ model: plan.model.id, prompt, params: plan.params }, signal)
+    const frames = [
+      ...inputs?.first === undefined ? [] : [{ url: inputs.first.dataUrl, frameType: 'first_frame' as const }],
+      ...inputs?.last === undefined ? [] : [{ url: inputs.last.dataUrl, frameType: 'last_frame' as const }],
+    ]
+    const references = (inputs?.references ?? []).map(i => i.dataUrl)
+    return adapter.submitVideo({
+      model: plan.model.id, prompt, params: plan.params,
+      ...frames.length === 0 ? {} : { frameImages: frames },
+      ...references.length === 0 ? {} : { inputReferences: references },
+    }, signal)
   }
 
   /** Read one job's state through the provider it was submitted to. */

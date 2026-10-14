@@ -90,6 +90,12 @@ describe('OpenRouterAdapter', () => {
     expect(JSON.parse(calls[0]?.init.body as string)).toEqual({ model: 'google/gemini-image', prompt: 'a cat', resolution: '2K' })
   })
 
+  it('reads a cost sent as a decimal string', async () => {
+    const { impl } = stubFetch(() => ({ body: { data: [{ b64_json: PNG_B64 }], usage: { cost: '0.007' } } }))
+    const adapter = new OpenRouterAdapter({ baseURL: 'https://openrouter.ai/api/v1', apiKey: 'k', fetch: impl, timeoutMs: 1000 })
+    expect((await adapter.generateImage({ model: 'm', prompt: 'p', params: {} })).costUsd).toBe(0.007)
+  })
+
   it('reports a missing cost as null', async () => {
     const { impl } = stubFetch(() => ({ body: { data: [{ b64_json: PNG_B64 }] } }))
     const adapter = new OpenRouterAdapter({ baseURL: 'https://x/api/v1', apiKey: 'k', fetch: impl, timeoutMs: 1000 })

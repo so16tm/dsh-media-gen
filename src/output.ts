@@ -55,6 +55,24 @@ export function resolveOutputDir(cwd: string, configured: string): string {
   return dir
 }
 
+/**
+ * Write a new file named `<base>.<extension>`, or `<base>-2.<extension>` and
+ * so on when that name is taken, e.g. by a generation in the same second.
+ * Existing files are never overwritten.
+ * @returns the path written.
+ */
+export async function writeNewFile(dir: string, base: string, extension: string, data: Uint8Array): Promise<string> {
+  for (let n = 1; ; n++) {
+    const path = join(dir, `${base}${n === 1 ? '' : `-${n}`}.${extension}`)
+    try {
+      await writeFile(path, data, { flag: 'wx' })
+      return path
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== 'EEXIST' || n >= 1000) throw error
+    }
+  }
+}
+
 /** File-name-safe slug of a model id. */
 export function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 48) || 'image'
@@ -80,15 +98,18 @@ export async function saveImages(
   const stem = `${timestamp(options.now ?? new Date())}-${slug(options.model)}`
   const saved: SavedImage[] = []
   let attachmentFailures = 0
-  for (const [index, data] of images.entries()) {
+  // Every image is checked before any is written, so a bad one leaves no partial batch.
+  const types = images.map((data) => {
     if (data.byteLength > options.maxBytes) {
       throw new MediaError('INVALID_RESPONSE', `a generated image is ${data.byteLength} bytes, above the ${options.maxBytes}-byte limit`)
     }
     const mediaType = sniffImage(data)
     if (mediaType === undefined) throw new MediaError('INVALID_RESPONSE', 'the provider returned an unsupported image format')
-    const path = join(options.dir, `${stem}-${index + 1}.${EXTENSIONS[mediaType]}`)
-    // `wx` never overwrites an existing file.
-    await writeFile(path, data, { flag: 'wx' })
+    return mediaType
+  })
+  for (const [index, data] of images.entries()) {
+    const mediaType = types[index]!
+    const path = await writeNewFile(options.dir, `${stem}-${index + 1}`, EXTENSIONS[mediaType], data)
     const entry: SavedImage = { path, mediaType, bytes: data.byteLength }
     if (options.attachments !== undefined && options.attachments.imageLimits.mediaTypes.includes(mediaType)) {
       try {

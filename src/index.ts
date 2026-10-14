@@ -12,12 +12,27 @@ import type {} from '@deepseek-ai/dsh-credentials'
 import { boundContextSummary, createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
 import {
-  describeJob, MemoryJobStore, openDomainStore, VideoJobWatcher, type JobStore, type StorageDomainService, type VideoJobRecord,
+  describeJob, MemoryJobStore, openDomainStore, VideoJobWatcher, type JobStore, type VideoJobRecord,
 } from './jobs.ts'
+import {
+  MEDIA_APPROVAL_COMMAND, MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaApprovalCommand,
+  runMediaModelCommand, type SessionModelStore,
+} from './session-models.ts'
+import {
+  IMAGE_COMMAND, IMAGE_HINT, runImageCommand, runVideoCommand, VIDEO_COMMAND, VIDEO_HINT, type DirectDeps,
+} from './direct.ts'
+import { MemoryPromptNoteStore, openPromptNoteStore, type PromptNoteStore } from './prompt-notes.ts'
+import { MemoryMediaFileIndex, openMediaFileIndex, type MediaFileIndex } from './media-files.ts'
+import { registerRoutes, type FetchRegistry } from './routes.ts'
+import type { StorageDomainService } from './storage.ts'
+import { TurnGuard } from './turn-guard.ts'
+import { workingDirectory } from './generate.ts'
+import { outsidePaths } from './input-images.ts'
+import { MediaError, type MediaErrorCode } from './errors.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
 import { MediaService, type ImageArgs } from './service.ts'
-import { registerTools, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
+import { imageToolArgs, registerTools, sessionArgs, sessionIdOf, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO, TOOL_SET_PROMPT_NOTES } from './tools.ts'
 import type { VideoArgs } from './video.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -67,6 +82,10 @@ export interface Config {
   maxVideoBytes: Volatile<number>
   /** Tell the session when a video job ends. */
   notifyOnVideoCompletion: Volatile<boolean>
+  /** Image model ids the chat input offers; empty offers every listed model. */
+  chatImageModels: Volatile<string[]>
+  /** Video model ids the chat input offers; empty offers every listed model. */
+  chatVideoModels: Volatile<string[]>
 }
 
 /** Validated configuration with defaults. */
@@ -86,6 +105,8 @@ export const Config = z.object({
   videoMaxWatchMs: z.natural().min(60_000).default(3 * 60 * 60_000).volatile(),
   maxVideoBytes: z.natural().min(1).default(500 * 1024 * 1024).volatile(),
   notifyOnVideoCompletion: z.boolean().default(true).volatile(),
+  chatImageModels: z.array(z.string()).default([]).volatile(),
+  chatVideoModels: z.array(z.string()).default([]).volatile(),
 })
 
 /** Live agent surface used to report finished video jobs. */
@@ -101,11 +122,32 @@ interface AgentRegistry {
   get(sessionId: string): AgentLike | undefined
 }
 
+/** The part of DSH's command registry this plugin uses. */
+interface CommandRegistry {
+  register(definition: {
+    name: string
+    description: string
+    input?: { hint: string }
+    handler(invocation: { agent: AgentLike; rawInput: string; signal: AbortSignal }): Promise<{ kind: 'success' | 'error'; text: string }>
+  }): unknown
+}
+
+/** Command listing video jobs, without the slash. */
+const JOBS_COMMAND = 'media-jobs'
+
 /** Message source of this plugin's in-session notices. */
 const SOURCE_KIND = 'plugin:dsh-media-gen'
 
-/** Prompt excerpt length shown in the approval prompt. */
-const PROMPT_PREVIEW = 200
+/** How long to wait for DSH's storage service before keeping records in memory only. */
+const STORAGE_WAIT_MS = 10_000
+
+/** Prompt excerpt length shown in the approval prompt; the agent writes the prompt, so most of it is shown. */
+const PROMPT_PREVIEW = 1500
+
+/** Errors that mean the plugin refuses the request itself, before any charge. */
+const REJECTED_REQUEST: ReadonlySet<MediaErrorCode> = new Set([
+  'NO_PROVIDER', 'PROVIDER_NOT_FOUND', 'NO_MODEL', 'UNSUPPORTED_MODEL', 'UNSUPPORTED_PARAMETER', 'INVALID_REQUEST', 'LIMIT_EXCEEDED',
+])
 
 /**
  * Register the media tools and the cost-approval gate.
@@ -147,18 +189,27 @@ export function apply(ctx: Context, config: Config): void {
         summary: boundContextSummary(`Video job ${record.status === 'completed' ? 'finished' : record.status}: ${record.modelName}`),
       },
     })
-    if (wake && agent.status === 'idle') agent.followup(message)
+    // A job the user started with `/video` bypassed the agent, so its outcome must not start an agent turn.
+    if (wake && agent.status === 'idle' && record.origin !== 'command') agent.followup(message)
     else agent.inject(message)
     return true
   }
 
-  const storageDomain = get('storageDomain') as StorageDomainService | undefined
-  const store: Promise<JobStore> = storageDomain === undefined
-    ? Promise.resolve(new MemoryJobStore())
-    : openDomainStore(storageDomain).catch((error: unknown) => {
+  // DSH's storage-domain plugin may start after this one, so wait for its service instead of reading it once.
+  const storageDomain = new Promise<StorageDomainService | undefined>((resolve) => {
+    const present = get('storageDomain') as StorageDomainService | undefined
+    if (present !== undefined) { resolve(present); return }
+    const timer = setTimeout(() => { resolve(undefined) }, STORAGE_WAIT_MS)
+    timer.unref?.()
+    ;(ctx as unknown as { inject(deps: string[], fn: (c: { storageDomain: StorageDomainService }) => void): void })
+      .inject(['storageDomain'], (c) => { clearTimeout(timer); resolve(c.storageDomain) })
+  })
+  const store: Promise<JobStore> = storageDomain.then(domain => domain === undefined
+    ? new MemoryJobStore()
+    : openDomainStore(domain).catch((error: unknown) => {
       ctx.logger.warn(`dsh-media-gen: video jobs will not survive a restart; job storage failed to open: ${String(error)}`)
       return new MemoryJobStore()
-    })
+    }))
   const videoJobs = store.then((jobs) => {
     const watcher = new VideoJobWatcher(jobs, service, () => ({
       pollIntervalMs: config.videoPollIntervalMs.get(),
@@ -185,41 +236,227 @@ export function apply(ctx: Context, config: Config): void {
       })
     })
 
-  registerTools(ctx, service, {
+  const sessionModels: Promise<SessionModelStore> = storageDomain.then(domain => domain === undefined
+    ? new MemorySessionModelStore()
+    : openSessionModelStore(domain).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-media-gen: session model choices will not survive a restart; their storage failed to open: ${String(error)}`)
+      return new MemorySessionModelStore()
+    }))
+  ctx.effect(() => async () => { await (await sessionModels).close?.() })
+
+  const promptNotes: Promise<PromptNoteStore> = storageDomain.then(domain => domain === undefined
+    ? new MemoryPromptNoteStore()
+    : openPromptNoteStore(domain).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-media-gen: prompt notes will not survive a restart; their storage failed to open: ${String(error)}`)
+      return new MemoryPromptNoteStore()
+    }))
+  ctx.effect(() => async () => { await (await promptNotes).close?.() })
+
+  const mediaFiles: Promise<MediaFileIndex> = storageDomain.then(domain => domain === undefined
+    ? new MemoryMediaFileIndex()
+    : openMediaFileIndex(domain).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-media-gen: generated images will not show in the chat after a restart; their index failed to open: ${String(error)}`)
+      return new MemoryMediaFileIndex()
+    }))
+  ctx.effect(() => async () => { await (await mediaFiles).close?.() })
+
+  const generateConfig = {
     outputDir: config.outputDir,
     maxImageBytes: config.maxImageBytes,
     videoJobs,
     maxWatchMs: () => config.videoMaxWatchMs.get(),
+    mediaFiles,
+  }
+  const direct: DirectDeps = {
+    ctx, service, config: generateConfig, sessionModels, requireApproval: () => config.requireApproval.get(),
+  }
+  // Whether the user allowed generation without asking in this session.
+  const autoApproved = async (sessionId: string | undefined): Promise<boolean> =>
+    sessionId !== undefined && (await sessionModels).get(sessionId)?.autoApprove === true
+
+  // `/media-model` sets the session's models; `/image`, `/video`, and `/media-jobs` work without the agent.
+  ;(ctx as unknown as { inject(deps: string[], fn: (c: { commands: CommandRegistry }) => void): void })
+    .inject(['commands'], (c) => {
+      c.commands.register({
+        name: MEDIA_MODEL_COMMAND,
+        description: 'Choose the image or video generation model for this session',
+        input: { hint: 'image|video <model-id> [provider]' },
+        handler: async ({ agent, rawInput, signal }) => {
+          const outcome = await runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal)
+          const [kind, model] = rawInput.trim().split(/\s+/u)
+          // Tell the agent at its next step, so it does not reuse a model id it saw before the change.
+          if (outcome.kind === 'success' && (kind === 'image' || kind === 'video') && model !== undefined) {
+            agent.inject(createUserMessage({
+              content: [{ type: 'text', text: `The user changed the ${kind} generation model for this session: ${outcome.text}. `
+                + `Leave model unset in media_generate_${kind} so this selection is used.` }],
+              source: { kind: SOURCE_KIND, form: 'notice', summary: boundContextSummary(`${kind} model changed`) },
+            }))
+          }
+          return outcome
+        },
+      })
+      c.commands.register({
+        name: MEDIA_APPROVAL_COMMAND,
+        description: 'Allow image and video generation without asking in this session, or ask again',
+        input: { hint: 'on|off' },
+        handler: async ({ agent, rawInput }) =>
+          runMediaApprovalCommand(await sessionModels, agent.session.id, rawInput, config.requireApproval.get()),
+      })
+      c.commands.register({
+        name: IMAGE_COMMAND,
+        description: 'Generate images from your prompt as written, without the agent',
+        input: { hint: IMAGE_HINT },
+        handler: ({ agent, rawInput, signal }) => runImageCommand(direct, rawInput, { agent, signal }),
+      })
+      c.commands.register({
+        name: VIDEO_COMMAND,
+        description: 'Start a video from your prompt as written, without the agent',
+        input: { hint: VIDEO_HINT },
+        handler: ({ agent, rawInput, signal }) => runVideoCommand(direct, rawInput, { agent, signal }),
+      })
+      c.commands.register({
+        name: JOBS_COMMAND,
+        description: 'Show the video jobs of this session, or check one now',
+        input: { hint: '[job-id]' },
+        handler: async ({ agent, rawInput, signal }) => {
+          const watcher = await videoJobs
+          const id = rawInput.trim()
+          try {
+            if (id.length > 0) return { kind: 'success', text: describeJob(await watcher.check(id, signal)) }
+          } catch (error) {
+            return { kind: 'error', text: String(error) }
+          }
+          const jobs = watcher.store.list().filter(job => job.sessionId === agent.session.id)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10)
+          return { kind: 'success', text: jobs.length === 0 ? 'No video jobs in this session.' : jobs.map(describeJob).join('\n\n') }
+        },
+      })
+    })
+
+  // Model lists and session choices for the browser half's pickers.
+  ;(ctx as unknown as { inject(deps: string[], fn: (c: { connection: { fetch: FetchRegistry } }) => void): void })
+    .inject(['connection'], (c) => {
+      registerRoutes(c.connection.fetch, service, sessionModels, () => ({
+        image: config.chatImageModels.get(), video: config.chatVideoModels.get(),
+      }), () => config.requireApproval.get(), { files: mediaFiles, jobs: videoJobs, outputDir: config.outputDir })
+    })
+
+  registerTools(ctx, service, {
+    ...generateConfig,
+    requestTimeoutMs: config.requestTimeoutMs,
+    sessionModels,
+    promptNotes,
   })
 
+  // A second generation in one turn is the agent acting on its own; it always asks.
+  const turnGuard = new TurnGuard()
+  ctx.on('agent/pre-step', async (step, next) => {
+    turnGuard.enter(step.agent, step.turn)
+    return await next()
+  })
+
+  // The cost gate runs outermost, so a listener that allows without calling
+  // next() cannot skip it; the guard below denies any generation it never saw.
+  const gated = new WeakSet<object>()
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    const decision = await next()
-    if (!config.requireApproval.get() || decision.kind !== 'allow') return decision
-    if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return decision
-    const args = exec.arguments as { prompt?: unknown }
-    if (typeof args?.prompt !== 'string') return decision
-    const prompt = args.prompt.length > PROMPT_PREVIEW ? `${args.prompt.slice(0, PROMPT_PREVIEW)}…` : args.prompt
+    if (exec.name === TOOL_SET_PROMPT_NOTES) {
+      // Notes reach every later session's agent, so the user sees what is saved.
+      const downstream = await next()
+      if (downstream.kind !== 'allow') return downstream
+      const args = exec.arguments as { model?: unknown; notes?: unknown } | undefined
+      const notes = (lang: Parameters<typeof t>[0]) => t(lang, 'approval.notes', { model: String(args?.model ?? ''), notes: String(args?.notes ?? '') })
+      return { kind: 'ask', reason: notes('en'), displayReason: localized(notes) }
+    }
+    if (exec.name !== TOOL_GENERATE_IMAGE && exec.name !== TOOL_GENERATE_VIDEO) return await next()
+    gated.add(exec)
+    const downstream = await next()
+    if (downstream.kind === 'deny' || downstream.kind === 'cancel') return downstream
+    const repeat = turnGuard.repeat(exec.agent)
+    // A file outside the working directory is sent away only after the user sees its path.
+    const outside = await outsideInputs(exec)
+    if (!repeat && outside.length === 0 && (!config.requireApproval.get() || await autoApproved(sessionIdOf(exec)))) return downstream
+    const ours = await costQuestion(exec, repeat, outside)
+    if (ours.kind !== 'ask' || downstream.kind !== 'ask' || downstream.reason === undefined) return ours
+    // Another policy asks too: one question carries both reasons.
+    const reason = downstream.reason
+    return {
+      kind: 'ask',
+      reason: `${ours.reason ?? ''}\n${reason}`,
+      displayReason: Object.fromEntries(Object.entries(ours.displayReason ?? { en: ours.reason ?? '' })
+        .map(([lang, text]) => [lang, `${text}\n${downstream.displayReason?.[lang] ?? reason}`])) as { en: string },
+    }
+  }, { prepend: true })
+  ctx.effect(() => ctx.tools.guard(exec =>
+    (exec.name === TOOL_GENERATE_IMAGE || exec.name === TOOL_GENERATE_VIDEO) && !gated.has(exec)
+      ? 'media generation was allowed without its cost check; it was not run and nothing was charged'
+      : undefined))
+
+  /** Input image paths of a generation call that lie outside the session working directory. */
+  async function outsideInputs(exec: { arguments: unknown; signal: AbortSignal; agent?: unknown }): Promise<string[]> {
+    const raw = exec.arguments as Record<string, unknown> | undefined
+    const paths = [raw?.input_images, raw?.reference_images, raw?.first_frame, raw?.last_frame]
+      .flatMap(v => (Array.isArray(v) ? v : [v])).filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim())
+    if (paths.length === 0) return []
+    try {
+      return outsidePaths(paths, await workingDirectory(ctx, exec))
+    } catch {
+      return paths
+    }
+  }
+
+  /** The approval question for one generation call; a call it cannot price still asks. */
+  async function costQuestion(
+    exec: { name: string; arguments: unknown; signal: AbortSignal; agent?: unknown }, repeat: boolean, outside: readonly string[],
+  ): Promise<PreToolDecision> {
+    const raw = exec.arguments as { prompt?: unknown; prompts?: unknown } | undefined
+    const args = exec.name === TOOL_GENERATE_IMAGE
+      ? Array.isArray(raw?.prompts) && raw.prompts.length > 0 && raw.prompts.every(p => typeof p === 'string') ? imageToolArgs(raw as { prompts: string[] }) : undefined
+      : raw
+    if (typeof args?.prompt !== 'string') {
+      return { kind: 'deny', reason: `invalid arguments: ${exec.name === TOOL_GENERATE_IMAGE ? 'prompts must be a non-empty array of strings' : 'prompt must be a string'}; nothing was charged` }
+    }
+    const preview = (text: string) => (text.length > PROMPT_PREVIEW ? `${text.slice(0, PROMPT_PREVIEW)}…` : text)
+    const prompt = preview(args.prompt)
     let text: (lang: Parameters<typeof t>[0]) => string
+    let inputs: string[] = []
+    let variations: string[] = []
     try {
       if (exec.name === TOOL_GENERATE_IMAGE) {
-        const plan = await service.plan(args as ImageArgs, exec.signal)
+        const plan = await service.plan(await sessionArgs(sessionModels, 'image', args as ImageArgs, exec as never), exec.signal)
         const cost = await service.estimate(plan, exec.signal)
+        inputs = plan.inputs
+        variations = plan.variations
         text = lang => t(lang, 'approval.image', {
-          count: String(plan.count), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
+          count: String(plan.count * (1 + plan.variations.length)), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
         })
       } else {
-        const plan = await service.planVideo(args as VideoArgs, exec.signal)
+        const plan = await service.planVideo(await sessionArgs(sessionModels, 'video', args as VideoArgs, exec as never), exec.signal)
         const cost = service.estimateVideo(plan)
+        const { first, last, references } = plan.inputs
+        inputs = [
+          ...first === undefined ? [] : [`${first} (first frame)`],
+          ...last === undefined ? [] : [`${last} (last frame)`],
+          ...references,
+        ]
         const duration = plan.params.duration
         text = lang => t(lang, typeof duration === 'number' ? 'approval.video' : 'approval.video.default', {
           model: plan.model.name, provider: plan.provider.id, cost: formatCostRange(lang, cost), seconds: String(duration),
         })
       }
-    } catch {
-      // An invalid request fails in execute with its classified error, before any charge.
-      return decision
+    } catch (error) {
+      // A request the plugin itself rejects would fail before any charge; say so now.
+      if (error instanceof MediaError && REJECTED_REQUEST.has(error.code)) return { kind: 'deny', reason: error.message }
+      // Anything else (a model listing or credential lookup that failed) may
+      // succeed by the time the call runs, so the user still decides.
+      const detail = error instanceof MediaError ? error.message : 'the model listing could not be read'
+      text = lang => t(lang, exec.name === TOOL_GENERATE_IMAGE ? 'approval.unpriced.image' : 'approval.unpriced.video', { detail })
     }
-    const full = (lang: Parameters<typeof t>[0]) => `${text(lang)}\n${t(lang, 'approval.prompt', { prompt })}`
+    const inputLine = (lang: Parameters<typeof t>[0]) => (inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`)
+      + (outside.length === 0 ? '' : `\n${t(lang, 'approval.outside', { paths: outside.join(', ') })}`)
+    const full = (lang: Parameters<typeof t>[0]) =>
+      `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${variations.length === 0 ? t(lang, 'approval.prompt', { prompt }) : t(lang, 'approval.variation', { n: '1', prompt })}`
+      + variations.map((v, i) => `\n${t(lang, 'approval.variation', { n: String(i + 2), prompt: preview(v) })}`).join('')
+      + `\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }
-  })
+  }
 }

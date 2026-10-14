@@ -8,6 +8,8 @@ import { OpenRouterAdapter } from '../src/openrouter.ts'
 import { resolveOutputDir, saveImages, sniffImage } from '../src/output.ts'
 import { ProviderBridge } from '../src/provider-bridge.ts'
 import { MediaService, type ServiceSettings } from '../src/service.ts'
+import { runImagePlan } from '../src/generate.ts'
+import { imageToolArgs } from '../src/tools.ts'
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
 
@@ -77,6 +79,40 @@ describe('MediaService', () => {
   })
 })
 
+describe('image variations', () => {
+  it('plans one image per variation, estimates them all, and refuses a listed-variant prompt with count', async () => {
+    const { svc } = service({ defaultImageModel: 'g/img', maxImagesPerCall: 3 })
+    const plan = await svc.plan({ prompt: 'a cat sitting', variations: ['a cat stretching', ' ', 'a cat jumping'] })
+    expect(plan.variations).toEqual(['a cat stretching', 'a cat jumping'])
+    expect(await svc.estimate(plan)).toBeCloseTo(0.18)
+    await expect(svc.plan({ prompt: 'x', count: 2, variations: ['y'] })).rejects.toThrow('not both')
+    await expect(svc.plan({ prompt: 'x', variations: ['a', 'b', 'c'] })).rejects.toMatchObject({ code: 'LIMIT_EXCEEDED' })
+    await expect(svc.plan({ prompt: 'white cat, three different poses: standing, sitting', count: 3 })).rejects.toThrow('one prompt per image')
+    await expect(svc.plan({ prompt: '白い猫、それぞれ違うポーズ', count: 3 })).rejects.toThrow('one prompt per image')
+    expect((await svc.plan({ prompt: 'a white cat', count: 3 })).count).toBe(3)
+    await expect(svc.plan({ prompt: 'white cat in three different poses', variations: ['a cat sitting', 'a cat lying'] }))
+      .rejects.toThrow('prompt 1 describes')
+    await expect(svc.plan({ prompt: 'a cat sitting', variations: ['a cat in various poses'] })).rejects.toThrow('prompt 2 describes')
+  })
+
+  it('turns the tool\'s prompts into one image each', () => {
+    expect(imageToolArgs({ prompts: [' a cat sitting ', '', 'a cat jumping'], model: 'm' }))
+      .toEqual({ prompt: 'a cat sitting', variations: ['a cat jumping'], model: 'm' })
+  })
+
+  it('sends one request per prompt and saves every image', async () => {
+    const { svc, requests } = service({ defaultImageModel: 'g/img' })
+    const dir = await mkdtemp(join(tmpdir(), 'media-var-'))
+    const plan = await svc.plan({ prompt: 'a cat sitting', variations: ['a cat jumping'] })
+    const ctx = { get: () => undefined } as never
+    const caller = { signal: new AbortController().signal, agent: { session: { header: { cwd: dir } } } } as never
+    const value = await runImagePlan(ctx, svc, { outputDir: 'out', maxImageBytes: 1_000_000, videoJobs: new Promise(() => {}) } as never, plan, 'a cat sitting', caller)
+    expect(value.images).toHaveLength(2)
+    expect(value.costUsd).toBeCloseTo(0.1)
+    expect(requests.filter(u => u.endsWith('/images'))).toHaveLength(2)
+  })
+})
+
 describe('CapabilityCatalog', () => {
   it('caches within the TTL and serves a stale copy when a refresh fails', async () => {
     let now = 0
@@ -125,7 +161,10 @@ describe('output', () => {
     expect(saved[0]?.path).toBe(join(dir, '20261014-090507-google-gemini-image-1.png'))
     expect(await readFile(saved[0]!.path)).toEqual(Buffer.from(PNG))
     expect(attachmentFailures).toBe(1)
-    await expect(saveImages([PNG], { dir, model: 'google/Gemini Image', now, maxBytes: 1000 })).rejects.toThrow()
+    // A second save in the same second gets a numbered name; the first file is kept.
+    const again = await saveImages([PNG], { dir, model: 'google/Gemini Image', now, maxBytes: 1000 })
+    expect(again.saved[0]?.path).toBe(join(dir, '20261014-090507-google-gemini-image-1-2.png'))
+    expect(await readFile(saved[0]!.path)).toEqual(Buffer.from(PNG))
   })
 
   it('refuses oversized or unknown data', async () => {
@@ -145,5 +184,17 @@ describe('messages', () => {
 
   it('falls back to English and then to the key', () => {
     expect(t('ja', 'missing.key')).toBe('missing.key')
+  })
+})
+
+describe('writeNewFile', () => {
+  it('numbers a name that is already taken instead of overwriting it', async () => {
+    const { writeNewFile } = await import('../src/output.ts')
+    const dir = await mkdtemp(join(tmpdir(), 'media-'))
+    const first = await writeNewFile(dir, 'a-1', 'png', Uint8Array.from([1]))
+    const second = await writeNewFile(dir, 'a-1', 'png', Uint8Array.from([2]))
+    expect(first).toBe(join(dir, 'a-1.png'))
+    expect(second).toBe(join(dir, 'a-1-2.png'))
+    expect([...await readFile(first)]).toEqual([1])
   })
 })

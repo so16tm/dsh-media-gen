@@ -6,10 +6,10 @@
  * @module dsh-media-gen/src/jobs
  */
 
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir } from 'node:fs/promises'
 import { MediaError } from './errors.ts'
-import { slug, timestamp } from './output.ts'
+import { slug, timestamp, writeNewFile } from './output.ts'
+import { openDomain, type DomainSpecLike, type DomainTable, type StorageDomainService } from './storage.ts'
 import { isTerminal, sniffVideo, type CostRange, type VideoJobStatus } from './video.ts'
 
 /** Local status: the provider's, plus `stopped` when this plugin gave up watching. */
@@ -34,6 +34,8 @@ export interface VideoJobRecord {
   params: Record<string, string | number | boolean>
   /** Session that asked for the video, when known. */
   sessionId?: string
+  /** Who started the job: the agent's tool call or the user's `/video` command. Absent on older records. */
+  origin?: 'agent' | 'command'
   /** Absolute directory the outputs are written to. */
   dir: string
   status: JobStatus
@@ -104,46 +106,23 @@ export const jobRecordSchema = {
   },
 }
 
-/** Storage-domain declaration, structurally compatible with DSH's `defineDomain` output. */
+/** Storage-domain declaration of the job records. */
 export const JOB_DOMAIN = {
   name: 'media_gen',
   version: 1,
   tables: { video_jobs: { valueSchema: jobRecordSchema } },
-} as const
+} as const satisfies DomainSpecLike
 
-interface DomainTable {
-  get(key: string): VideoJobRecord | undefined
-  values?(): IterableIterator<VideoJobRecord>
-  entries(): IterableIterator<[string, VideoJobRecord]>
-  put(key: string, value: VideoJobRecord): Promise<void>
-}
-
-/** The part of DSH's storage-domain service this plugin uses. */
-export interface StorageDomainService {
-  open(spec: typeof JOB_DOMAIN): Promise<{ table(name: 'video_jobs'): DomainTable; close(): Promise<void> }>
-}
-
-/**
- * Open the durable job store, retrying while a previous instance of this
- * plugin is still closing the domain after a reload.
- */
+/** Open the durable job store. */
 export async function openDomainStore(service: StorageDomainService, attempts = 10, delayMs = 200): Promise<JobStore> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const domain = await service.open(JOB_DOMAIN)
-      const table = domain.table('video_jobs')
-      return {
-        durable: true,
-        list: () => [...table.entries()].map(([, value]) => value),
-        get: id => table.get(id),
-        put: record => table.put(record.id, record),
-        close: () => domain.close(),
-      }
-    } catch (error) {
-      const code = isRecord(error) ? error.code : undefined
-      if (code !== 'already-open' || attempt >= attempts) throw error
-      await new Promise(resolve => setTimeout(resolve, delayMs))
-    }
+  const domain = await openDomain(service, JOB_DOMAIN, attempts, delayMs)
+  const table = domain.table('video_jobs') as DomainTable<VideoJobRecord>
+  return {
+    durable: true,
+    list: () => [...table.entries()].map(([, value]) => value),
+    get: id => table.get(id),
+    put: record => table.put(record.id, record),
+    close: () => domain.close(),
   }
 }
 
@@ -301,9 +280,7 @@ export class VideoJobWatcher {
     const stem = `${timestamp(new Date(this.now()))}-${slug(record.model)}`
     const saved: SavedVideo[] = []
     for (const [index, item] of downloads.entries()) {
-      const path = join(record.dir, `${stem}-${index + 1}.${item.extension}`)
-      // `wx` never overwrites an existing file.
-      await writeFile(path, item.data, { flag: 'wx' })
+      const path = await writeNewFile(record.dir, `${stem}-${index + 1}`, item.extension, item.data)
       saved.push({ path, mediaType: item.mediaType, bytes: item.data.byteLength })
     }
     return saved
@@ -343,7 +320,7 @@ export function describeJob(record: VideoJobRecord): string {
     case 'completed':
       return record.files.length > 0
         ? `${head} finished. Saved:\n${record.files.map(f => `- ${f.path} (${f.mediaType}, ${f.bytes} bytes)`).join('\n')}\n${cost.trim()}`.trim()
-          + '\nTo hand a file to the user as a deliverable, call the present tool with its path.'
+          + '\nIn your reply, show the user the video by calling the present tool with its path; the chat plays it in the preview.'
         : `${head} finished, but saving the video has not succeeded yet${record.error === undefined ? '' : `: ${record.error}`}. It will be retried.`
     case 'stopped':
       return `${head}: ${record.error ?? 'watching stopped'}. This is not a cancellation; call media_video_status with this job_id to check it again.`
