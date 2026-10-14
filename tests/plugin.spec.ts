@@ -389,19 +389,23 @@ describe('plugin apply', () => {
     expect(await hook({ name: 'media_list_models', arguments: {}, signal, agent: child }, async () => ({ kind: 'allow' }))).toEqual({ kind: 'allow' })
   })
 
-  it('asks for a generation in a turn a notice started after an earlier generation', async () => {
+  it('refuses a generation in a turn a notice started, and asks for a second one in the user\'s turn', async () => {
     stubNetwork()
     const { ctx, listeners } = fakeContext()
     apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
     const step = listeners.get('agent/pre-step') as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>
-    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string }>
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
     const signal = new AbortController().signal
     const agent = { session: { id: 's1', header: {} } }
     const call = () => hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal, agent }, async () => ({ kind: 'allow' }))
     await step({ agent, turn: 1, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
     expect((await call()).kind).toBe('allow')
-    await step({ agent, turn: 2, messages: [{ source: { kind: 'agent-message' } }] }, async () => ({}))
+    await step({ agent, turn: 1, messages: [] }, async () => ({}))
     expect((await call()).kind).toBe('ask')
+    await step({ agent, turn: 2, messages: [{ source: { kind: 'agent-message' } }] }, async () => ({}))
+    const unrequested = await call()
+    expect(unrequested.kind).toBe('deny')
+    expect(unrequested.reason).toContain('started by a notice')
     await step({ agent, turn: 3, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
     expect((await call()).kind).toBe('allow')
   })

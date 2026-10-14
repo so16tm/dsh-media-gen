@@ -5,28 +5,29 @@ const user = { source: { kind: 'user' } }
 const notice = { source: { kind: 'subagent-settled' } }
 
 describe('TurnGuard', () => {
-  it('flags the second generation of one request and resets when the user writes again', () => {
+  it('tells the first generation of a user turn from later ones, per agent and per turn', () => {
     const guard = new TurnGuard()
     const agent = {}
     const other = {}
-    expect(guard.repeat(agent)).toBe(false)
-    guard.enter(agent, [user])
-    guard.enter(other, [user])
-    expect(guard.repeat(agent)).toBe(false)
-    expect(guard.repeat(other)).toBe(false)
-    expect(guard.repeat(agent)).toBe(true)
-    guard.enter(agent, [user])
-    expect(guard.repeat(agent)).toBe(false)
-    expect(guard.repeat(undefined)).toBe(false)
+    expect(guard.standing(agent)).toBe('unknown')
+    guard.enter(agent, 1, [user])
+    guard.enter(other, 1, [user])
+    expect(guard.standing(agent)).toBe('first')
+    guard.record(agent)
+    guard.enter(agent, 1, [])
+    expect(guard.standing(agent)).toBe('repeat')
+    expect(guard.standing(other)).toBe('first')
+    guard.enter(agent, 2, [user])
+    expect(guard.standing(agent)).toBe('first')
+    expect(guard.standing(undefined)).toBe('unknown')
   })
 
-  it('keeps a turn started by a notice in the request before it', () => {
+  it('marks a turn a notice started as unrequested until the user writes in it', () => {
     const guard = new TurnGuard()
     const agent = {}
-    guard.enter(agent, [user])
-    expect(guard.repeat(agent)).toBe(false)
-    guard.enter(agent, [notice])
-    guard.enter(agent, [])
-    expect(guard.repeat(agent)).toBe(true)
+    guard.enter(agent, 1, [notice])
+    expect(guard.standing(agent)).toBe('unrequested')
+    guard.enter(agent, 1, [user])
+    expect(guard.standing(agent)).toBe('first')
   })
 })
