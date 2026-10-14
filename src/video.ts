@@ -92,13 +92,17 @@ function flag(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
 
+/** SKU names whose price is in US cents. */
+const CENTS_SKU = /(?:^|_)cents?(?:_|$)/u
+
 /** Parse `pricing_skus`, whose values are decimal strings; unparsable entries are dropped. */
 export function parsePricingSkus(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {}
   if (!isRecord(raw)) return out
   for (const [sku, value] of Object.entries(raw)) {
     const price = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
-    if (Number.isFinite(price) && price >= 0) out[sku] = price
+    // Some SKUs are priced in cents (`cents_per_video_output_second_480p`); the rest are in USD.
+    if (Number.isFinite(price) && price >= 0) out[sku] = CENTS_SKU.test(sku.toLowerCase()) ? price / 100 : price
   }
   return out
 }

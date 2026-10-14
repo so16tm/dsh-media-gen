@@ -8,12 +8,13 @@
 
 import type { ComponentType } from 'react'
 import { PICKER_DICTIONARIES, PICKER_LOCALE } from './locales.ts'
-import { MediaCommandView, MediaToolView } from './media-view.tsx'
+import { MediaCommandView, MediaToolView, MediaTurnTail } from './media-view.tsx'
 import { InputControl, SettingsView } from './pickers.tsx'
+import { turnMediaDefinition } from './turn-media.ts'
 import { VIDEO_PREVIEW_ID, VIDEO_TYPES, VideoBody } from './video.tsx'
 
 /** Services this half needs. */
-export const inject = ['documentPreviews', 'slots', 'locale', 'sessions']
+export const inject = ['documentPreviews', 'slots', 'locale', 'sessions', 'uiConversation']
 
 /** Key of this plugin's row on DSH's Plugins page: `<package>#<row id in cordis.patch.yml>`. */
 export const CONFIG_KEY = 'dsh-media-gen#media-gen'
@@ -64,6 +65,9 @@ interface ClientContext {
       locale?: string
       inject?: (sessionId: string) => Record<string, unknown>
     }, component: ComponentType<never>): () => void
+  }
+  uiConversation: {
+    events: { register(definition: typeof turnMediaDefinition): () => void }
   }
   sessions: {
     binding(sessionId: string): {
@@ -124,6 +128,11 @@ export function apply(ctx: ClientContext): void {
       name: 'conversation.chat.commandview', key, locale: PICKER_LOCALE,
     }, MediaCommandView as ComponentType<never>)), `media-gen: /${key} row`)
   }
+  // Reuse buttons under a closed turn's reply, for the images the turn generated.
+  ctx.effect(() => ctx.uiConversation.events.register(turnMediaDefinition), 'media-gen: turn images')
+  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
+    name: 'conversation.chat.turnTail', id: 'dsh-media-gen.images', order: 30, locale: PICKER_LOCALE,
+  }, MediaTurnTail as ComponentType<never>)), 'media-gen: turn images row')
   ctx.effect(() => ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
     name: 'conversation.input.left',
     id: INPUT_PICKER_ID,

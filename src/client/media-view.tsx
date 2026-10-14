@@ -9,6 +9,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { Translate } from './locales.ts'
 import { activeInput, onInputsChange } from './media-actions.ts'
+import { turnImages, type TurnTailOwner } from './turn-media.ts'
 import { fileUrl, imagePathsOf, imagesOf, jobIdOf, promptOf, textOf, videoJobOf } from './media-model.ts'
 
 /** How often a running video job is checked while its row is on screen. */
@@ -218,6 +219,33 @@ export function MediaToolView(props: MediaToolViewProps): ReactNode {
         ? jobId === undefined ? null : <JobVideo jobId={jobId} t={t} />
         : <Images paths={imagesOf(block.meta, text)} attachments={attachmentsOf(block.content)} loadImage={props.loadImage} open={props.openFile} t={t} />}
       <Prompt text={prompt} t={t} />
+    </div>
+  )
+}
+
+/**
+ * Under a closed turn's reply: each image the turn generated, small, with the
+ * reuse buttons, so they are at hand without opening the tool row.
+ */
+export function MediaTurnTail(props: TurnTailOwner & { t: Translate }): ReactNode {
+  const { t } = props
+  const paths = turnImages(props)
+  if (paths.length === 0) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '6px 0' }}>
+      {paths.map(path => (
+        <div key={path} style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+          <a href={fileUrl(path)} target="_blank" rel="noreferrer" title={path}
+            onClick={(e) => { e.preventDefault(); props.openFile(path) }}>
+            <img src={fileUrl(path)} alt={t('generatedImageAlt')} loading="lazy"
+              style={{ ...mediaStyle, width: 40, height: 40, objectFit: 'cover', borderRadius: 4 }} />
+          </a>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ ...quietStyle, fontSize: 12 }}>{path.split(/[\\/]/u).at(-1)}</div>
+            <ImageActions path={path} t={t} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

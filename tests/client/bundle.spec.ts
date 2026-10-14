@@ -24,7 +24,8 @@ beforeAll(() => {
 describe('client bundle', () => {
   it('registers under the package name and adds a video preview, a settings page, and a model picker', async () => {
     expect(loaded.id).toBe('dsh-media-gen')
-    expect(loaded.exports.inject).toEqual(['documentPreviews', 'slots', 'locale', 'sessions'])
+    expect(loaded.exports.inject).toEqual(['documentPreviews', 'slots', 'locale', 'sessions', 'uiConversation'])
+    const definitions: string[] = []
     const lines: string[] = []
     const previews: { id: string; extensions: string[]; loading: string; title(): string }[] = []
     const bodies: { name: string; key?: string; id?: string; inject?: (sessionId: string) => { command(line: string): Promise<void> } }[] = []
@@ -40,6 +41,7 @@ describe('client bundle', () => {
         inject: (_name: string, fn: () => () => void) => fn(),
         register: (options: (typeof bodies)[number]) => { bodies.push(options); return () => {} },
       },
+      uiConversation: { events: { register: (def: { kind: string }) => { definitions.push(def.kind); return () => {} } } },
       sessions: {
         binding: (sessionId: string) => sessionId !== 's1' ? undefined : {
           session: { command: async (line: string) => { lines.push(line); return { ok: true, value: { matched: true } } } },
@@ -56,8 +58,10 @@ describe('client bundle', () => {
       { name: 'tool.call.toolview', key: 'media_generate_video', id: undefined },
       { name: 'conversation.chat.commandview', key: 'image', id: undefined },
       { name: 'conversation.chat.commandview', key: 'video', id: undefined },
+      { name: 'conversation.chat.turnTail', key: undefined, id: 'dsh-media-gen.images' },
       { name: 'conversation.input.left', key: undefined, id: 'dsh-media-gen.models' },
     ])
+    expect(definitions).toEqual(['mediaGen.images'])
     expect(Object.keys(dictionaries).sort()).toEqual(['mediaGen', 'mediaGenVideo'])
     expect(Object.keys(dictionaries.mediaGen?.ja ?? {}).sort()).toEqual(Object.keys(dictionaries.mediaGen?.en ?? {}).sort())
     const picker = bodies.find(b => b.id === 'dsh-media-gen.models')!.inject!

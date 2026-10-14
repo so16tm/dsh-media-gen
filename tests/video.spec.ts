@@ -128,3 +128,14 @@ describe('OpenRouterAdapter video calls', () => {
     expect(error.message).not.toContain('sk-or-test')
   })
 })
+
+describe('cent-priced SKUs', () => {
+  it('reads cents as USD before estimating', () => {
+    const [grok] = parseVideoModels({ data: [{
+      id: 'x-ai/grok-imagine-video-lite', name: 'Grok', supported_durations: [1, 5],
+      pricing_skus: { cents_per_video_output_second_480p: '2', cents_per_video_output_second_720p: '4' },
+    }] })
+    expect(grok?.pricingSkus).toEqual({ cents_per_video_output_second_480p: 0.02, cents_per_video_output_second_720p: 0.04 })
+    expect(estimateVideoCost(grok!, 1, '480p')).toEqual({ min: 0.02, max: 0.02 })
+  })
+})
