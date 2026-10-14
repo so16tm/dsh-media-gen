@@ -1,2 +1,4 @@
+allowBuilds:
+  esbuild: set this to true or false
 overrides:
   "@deepseek-ai/schemastery": "3.18.4"
