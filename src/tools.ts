@@ -238,7 +238,12 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     async execute(args, exec) {
       const image = imageToolArgs(args)
       const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', image, exec), exec.signal)
-      return await runImagePlan(ctx, service, config, plan, image.prompt, exec) as never
+      const value = await runImagePlan(ctx, service, config, plan, image.prompt, exec)
+      // The chat already shows the images, their cost, and the reuse buttons, so the turn ends here:
+      // the agent gets no further step in which to re-ask, open the files, or generate again.
+      // A partial failure leaves the turn open so the agent can tell the user.
+      if (value.failed === undefined) (exec as { concludeTurn?: () => void }).concludeTurn?.()
+      return value as never
     },
   }))
 
@@ -361,10 +366,9 @@ export function renderImageResult(value: ImageToolValue): ContentBlock[] {
     `Generated ${value.images.length} image(s) with ${value.model} (provider ${value.provider}).`,
     ...value.images.map(i => `- ${i.path} (${i.mediaType}, ${i.bytes} bytes)`),
     `Cost: ${value.costUsd === null ? 'not reported' : `${value.costUsd} USD`}.`,
-    'In your reply, show each image with Markdown such as ![short description](<path>), using the path above, so it '
-      + 'appears in the reply itself; to hand a file over as a deliverable, call the present tool with its path.',
-    'Do not generate beyond what the user asked for. If this was the last image they asked for, stop here even if it '
-      + 'misses the request; say what differs and let the user decide.',
+    'The images are already shown to the user in the chat, so do not open, read, or view the files, and do not ask '
+      + 'whether to generate them. To show one again in a later reply, use Markdown such as ![short description](<path>).',
+    'Do not generate beyond what the user asked for; let the user decide what to change.',
   ]
   if (value.failed !== undefined) lines.push(`Stopped early: ${value.failed}. Tell the user; do not retry on your own.`)
   if (value.attachmentFailures > 0) lines.push(`${value.attachmentFailures} image(s) could not be attached inline; the files are saved.`)
