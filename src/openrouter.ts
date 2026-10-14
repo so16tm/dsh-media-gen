@@ -241,7 +241,9 @@ export class OpenRouterAdapter {
     }
     if (images.length === 0) throw new MediaError('INVALID_RESPONSE', 'the provider returned no decodable image')
     const usage = isRecord(body.usage) ? body.usage : {}
-    const cost = typeof usage.cost === 'number' && Number.isFinite(usage.cost) ? usage.cost : null
+    // Some responses carry the cost as a decimal string.
+    const raw = typeof usage.cost === 'string' && usage.cost.trim() !== '' ? Number(usage.cost) : usage.cost
+    const cost = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
     return { images, costUsd: cost }
   }
 

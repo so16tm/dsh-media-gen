@@ -38,13 +38,15 @@ const MODEL_GUIDE = 'Omit model to use the model the user selected; the selectio
 
 /** When details are missing; shared by both generation tools. */
 /** Generation is billed, so a finished call is never followed by another on the agent's own judgment. */
-const ONCE_GUIDE = 'Make only the generations the user asked for. When they ask for several (for example three images with '
-  + 'different poses), make that many calls, one per variant, or use count when the prompt is the same; never more. Once '
+const ONCE_GUIDE = 'Make only the generations the user asked for. When they ask for several images that differ (for example '
+  + 'three poses), make one call per image, each prompt describing that one image only; a prompt that lists several variants '
+  + 'produces a collage in every image. Use count only for copies of the same prompt. Never make more than asked. Once '
   + 'those return, do not call again on your own to retry, improve, fix, or vary the results, even if they miss the request: '
   + 'show them, say what differs, and let the user decide.'
 
-const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
-  + '(%s), ask the user once before generating, with ask_user_question when available, instead of guessing.'
+const ASK_GUIDE = 'Ask only when the request leaves out something essential that you cannot reasonably choose (%s), '
+  + 'and then ask once, all in one question, with ask_user_question when available. Details the user left open, such as '
+  + 'which poses or a fitting style, are yours to choose: choose them and say what you chose.'
 
 /** Most jobs one status listing shows. */
 const STATUS_LIMIT = 20
@@ -190,7 +192,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
       model: { type: 'string', description: 'Image model id; omit to use the model the user selected. A model chosen for this session in the chat input overrides it.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
-      count: { type: 'integer', description: 'Number of images (default 1).' },
+      count: { type: 'integer', description: 'Number of images from this same prompt (default 1). For images that differ, make one call each.' },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
       resolution: { type: 'string', description: 'Resolution tier such as 1K or 2K, if the model accepts it.' },
       seed: { type: 'integer', description: 'Seed for reproducible output, if the model accepts it.' },
@@ -206,7 +208,9 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       // The chat's media view shows the saved files from this; the model never sees it.
       presentationMeta: (_args, value) => {
         const result = value as unknown as ImageToolValue
-        return { model: result.model, images: result.images.map(i => ({ path: i.path, mediaType: i.mediaType })) }
+        return {
+          model: result.model, costUsd: result.costUsd, images: result.images.map(i => ({ path: i.path, mediaType: i.mediaType })),
+        }
       },
     },
     timeoutMs: 600_000,

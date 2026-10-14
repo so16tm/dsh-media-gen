@@ -197,7 +197,9 @@ export function MediaToolView(props: MediaToolViewProps): ReactNode {
   const settled = 'kind' in block && block.kind !== undefined
   const prompt = promptOf(block.call?.argsRaw ?? block.argsRaw)
   const text = textOf(block.content)
-  const model = (block.meta as { model?: unknown } | null | undefined)?.model
+  const meta = block.meta as { model?: unknown; costUsd?: unknown } | null | undefined
+  const model = meta?.model
+  const cost = typeof meta?.costUsd === 'number' ? t('mediaCost', { cost: String(meta.costUsd) }) : undefined
   const title = t(video ? 'videoTitle' : 'imageTitle')
   if (!settled) {
     return <div><Head title={title} detail={t('generating')} /><Prompt text={prompt} t={t} /></div>
@@ -214,7 +216,7 @@ export function MediaToolView(props: MediaToolViewProps): ReactNode {
   const jobId = video ? videoJobOf(block.meta, text) : undefined
   return (
     <div>
-      <Head title={title} detail={typeof model === 'string' ? model : undefined} />
+      <Head title={title} detail={[typeof model === 'string' ? model : undefined, cost].filter(Boolean).join(' · ') || undefined} />
       {video
         ? jobId === undefined ? null : <JobVideo jobId={jobId} t={t} />
         : <Images paths={imagesOf(block.meta, text)} attachments={attachmentsOf(block.content)} loadImage={props.loadImage} open={props.openFile} t={t} />}
