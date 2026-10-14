@@ -180,6 +180,9 @@ describe('plugin apply', () => {
     const generate = tools.find(t => t.name === 'media_generate_video')!
     const submitted = await generate.execute({ prompt: 'a wave', duration: 4 }, { signal, agent: { session: { id: 's1', header: { cwd } } } }) as { model: string }
     expect(submitted.model).toBe('v/vid')
+    // A model the agent repeats from earlier in the conversation does not override the session's choice.
+    const stale = await generate.execute({ prompt: 'a wave', duration: 4, model: 'old/vid' }, { signal, agent: { session: { id: 's1', header: { cwd } } } }) as { model: string }
+    expect(stale.model).toBe('v/vid')
     // The listing tells the agent which model the user selected for this session.
     const list = tools.find(t => t.name === 'media_list_models')!
     expect(await list.execute({ kind: 'video' }, { signal, agent: { session: { id: 's1' } } })).toMatchObject({ selected: { model: 'v/vid', by: 'session' } })

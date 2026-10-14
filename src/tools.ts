@@ -31,8 +31,10 @@ const PROMPT_GUIDE = 'Write the prompt for the chosen model from what the user w
   + 'before anything is billed.'
 
 /** Which model to use; shared by both generation tools. */
-const MODEL_GUIDE = 'Use the model the user selected: omit model, or pass the id media_list_models reports as selected. '
-  + 'Pass another model only when the user names one in this conversation; never switch on your own to a model you prefer.'
+const MODEL_GUIDE = 'Omit model to use the model the user selected; the selection can change between calls, so do not repeat an id '
+  + 'from earlier in the conversation. A model chosen for this session in the chat input always wins over model. Pass model '
+  + 'only when the user names one and selected.by is not "session"; if the user names another model while a session choice '
+  + 'exists, tell them to switch it in the chat input\'s Media menu or with /media-model. Never switch on your own to a model you prefer.'
 
 /** When details are missing; shared by both generation tools. */
 const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
@@ -52,7 +54,10 @@ export interface ToolConfig extends GenerateConfig {
 }
 
 /**
- * Apply the session's model choice to arguments that name no model.
+ * Apply the session's model choice. The choice made in the chat input wins
+ * over a model the agent names, because the agent may repeat an id from
+ * earlier in the conversation after the user switched; the agent's model
+ * applies only while the session has no choice.
  * @param store - session choices.
  * @param exec - the tool call, whose agent identifies the session.
  */
@@ -60,8 +65,10 @@ export async function sessionArgs<A extends { model?: string | undefined; provid
   store: Promise<SessionModelStore>, kind: MediaKind, args: A, exec: Pick<ToolExecution, 'agent'>,
 ): Promise<A> {
   const sessionId = sessionIdOf(exec)
-  if (sessionId === undefined || args.model !== undefined) return args
-  return withSessionModel(args, (await store).get(sessionId)?.[kind])
+  const choice = sessionId === undefined ? undefined : (await store).get(sessionId)?.[kind]
+  if (choice === undefined || choice.model === args.model) return withSessionModel(args, choice)
+  const { model: _model, provider: _provider, ...rest } = args
+  return withSessionModel({ ...rest, ...choice.provider === undefined && args.provider !== undefined ? { provider: args.provider } : {} } as A, choice)
 }
 
 function describeSpec(spec: ParameterSpec): string {
@@ -172,7 +179,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'aspect_ratio/resolution values a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' ' + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
     parameters: {
       prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
-      model: { type: 'string', description: 'Image model id; omit to use the model the user selected. Set it only when the user names a model.' },
+      model: { type: 'string', description: 'Image model id; omit to use the model the user selected. A model chosen for this session in the chat input overrides it.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       count: { type: 'integer', description: 'Number of images (default 1).' },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
@@ -200,7 +207,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + ASK_GUIDE.replace('%s', 'subject, length, aspect ratio, whether to include audio'),
     parameters: {
       prompt: { type: 'string', required: true, description: 'The prompt sent to the video model, written for that model as described above.' },
-      model: { type: 'string', description: 'Video model id; omit to use the model the user selected. Set it only when the user names a model.' },
+      model: { type: 'string', description: 'Video model id; omit to use the model the user selected. A model chosen for this session in the chat input overrides it.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       duration: { type: 'integer', description: 'Length in seconds, one the model lists.' },
       resolution: { type: 'string', description: 'Resolution such as 720p or 1080p, if the model lists it.' },
