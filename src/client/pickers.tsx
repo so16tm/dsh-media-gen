@@ -1,16 +1,21 @@
 /**
- * Model pickers: the plugin's settings page and the per-session picker in
- * the chat input. Selections from the input go through the `/media-model`
+ * Model pickers: the plugin's settings page and the chat input's media
+ * control (generation card and per-session models). Selections from the input go through the `/media-model`
  * command, so the Host validates and records them the same way.
  * @module dsh-media-gen/src/client/pickers
  */
 
+import { IconChevronDownOutlineRegular, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
-import { loadModels, loadSessionChoices, optionsOf, type MediaKind, type ModelListing, type SessionChoices } from './api.ts'
+import { findModel, loadModels, loadSessionChoices, optionsOf, type MediaKind, type ModelListing, type SessionChoices } from './api.ts'
+import { ComposeCard, type ComposeButtonProps } from './card.tsx'
 import type { Translate } from './locales.ts'
 
+// Native controls take DSH's surface and label colors; Chromium draws a
+// select's option list in them, so the list stays readable in both themes.
 const selectStyle: CSSProperties = {
-  font: 'inherit', color: 'inherit', background: 'transparent', border: '1px solid var(--border, rgba(127,127,127,.35))',
+  font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-base)',
+  border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))',
   borderRadius: 6, padding: '2px 6px', maxWidth: 220,
 }
 
@@ -109,52 +114,116 @@ function ModelRow(props: { kind: MediaKind; label: string; current: unknown; dis
 
 // ---------------------------------------------------------------- chat input
 
-/** Props the chat-input picker receives through its slot injection. */
-export interface InputPickerProps {
-  t: Translate
-  sessionId: string
-  /** Run a slash command line in this session. */
-  command(line: string): Promise<void>
+/** Props the chat-input control receives: its slot injection plus DSH's session-standard props. */
+export type InputControlProps = ComposeButtonProps
+
+type Pane = 'root' | MediaKind
+
+/** Trigger chrome matching DSH's own chips in the input's tool row (ui-model-selection `.trigger`). */
+const triggerStyle: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 4, height: 28, padding: '0 4px 0 8px', border: 'none',
+  borderRadius: 'var(--dsw-radius-sm)', background: 'transparent', color: 'var(--dsw-alias-label-secondary)',
+  font: 'inherit', fontSize: 13, lineHeight: '20px', whiteSpace: 'nowrap', cursor: 'pointer',
 }
 
-/** Compact image and video model pickers for the chat input. */
-export function InputPicker(props: InputPickerProps): ReactNode {
+const MODEL_PREFIX = 'model:'
+
+/**
+ * One compact chip in the chat input. Its menu opens the generation card and
+ * picks this session's image and video models, so the tool row keeps its
+ * single-line layout.
+ */
+export function InputControl(props: InputControlProps): ReactNode {
+  const { t } = props
+  const [open, setOpen] = useState(false)
+  const [pane, setPane] = useState<Pane>('root')
+  const [card, setCard] = useState(false)
   const [choices, setChoices] = useState<SessionChoices>()
   const [error, setError] = useState<string>()
+  const image = useListing('image')
+  const video = useListing('video')
   const reload = useCallback((signal?: AbortSignal) => {
-    loadSessionChoices(props.sessionId, signal).then(setChoices, () => { /* the picker stays on its last state */ })
+    loadSessionChoices(props.sessionId, signal).then(setChoices, () => { /* the menu stays on its last state */ })
   }, [props.sessionId])
   useEffect(() => {
     const controller = new AbortController()
     reload(controller.signal)
     return () => { controller.abort() }
   }, [reload])
+
+  const listingOf = (kind: MediaKind) => (kind === 'image' ? image : video).listing
+  const chosenOf = (kind: MediaKind) => choices?.[kind]?.model ?? ''
+  const nameOf = (kind: MediaKind, id: string) => findModel(listingOf(kind), id)?.name ?? id
+  const fallbackLabel = (kind: MediaKind) => {
+    const fallback = choices?.defaults[kind]
+    return fallback === null || fallback === undefined ? t('noDefault') : t('sessionDefault', { model: nameOf(kind, fallback) })
+  }
+  const currentLabel = (kind: MediaKind) => (chosenOf(kind) === '' ? fallbackLabel(kind) : nameOf(kind, chosenOf(kind)))
+
+  const close = () => { setOpen(false); setPane('root') }
   const pick = (kind: MediaKind, id: string): void => {
     setError(undefined)
     props.command(`/media-model ${kind} ${id === '' ? 'default' : id}`)
       .then(() => { reload() }, (e: unknown) => { setError(e instanceof Error ? e.message : String(e)); reload() })
   }
-  return (
-    <span title={error === undefined ? props.t('pickerTitle') : props.t('switchFailed', { message: error })}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-      <KindSelect kind="image" label={props.t('image')} choices={choices} t={props.t} onPick={pick} />
-      <KindSelect kind="video" label={props.t('video')} choices={choices} t={props.t} onPick={pick} />
+  const row = (label: string, value: string) => (
+    <span style={{ display: 'flex', gap: 16, justifyContent: 'space-between', minWidth: 0, width: '100%' }}>
+      <span>{label}</span>
+      <span style={{ color: 'var(--dsw-alias-label-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>{value}</span>
     </span>
   )
-}
+  const modelItems = (kind: MediaKind): MenuEntry[] => {
+    const listing = listingOf(kind)
+    if (listing === undefined) return [{ id: 'loading', label: t('loading'), disabled: true }]
+    return optionsOf(listing, chosenOf(kind) === '' ? undefined : chosenOf(kind)).map(m => ({ id: MODEL_PREFIX + m.id, label: m.name }))
+  }
+  const items: MenuEntry[] = pane === 'root'
+    ? [
+        { id: 'compose', label: t('compose') },
+        { type: 'separator', id: 'models' },
+        { id: 'pane:image', label: row(t('image'), currentLabel('image')) },
+        { id: 'pane:video', label: row(t('video'), currentLabel('video')) },
+      ]
+    : [
+        { id: 'back', label: `‹ ${t(pane)}` },
+        { type: 'separator', id: 'list' },
+        { id: MODEL_PREFIX, label: fallbackLabel(pane) },
+        ...modelItems(pane),
+      ]
+  const select = (id: string): void => {
+    if (id === 'compose') {
+      close()
+      setCard(true)
+    } else if (id === 'pane:image' || id === 'pane:video') {
+      setPane(id === 'pane:image' ? 'image' : 'video')
+    } else if (id === 'back') {
+      setPane('root')
+    } else if (id.startsWith(MODEL_PREFIX) && pane !== 'root') {
+      pick(pane, id.slice(MODEL_PREFIX.length))
+      close()
+    }
+  }
 
-function KindSelect(props: { kind: MediaKind; label: string; choices: SessionChoices | undefined; t: Translate; onPick(kind: MediaKind, id: string): void }): ReactNode {
-  const { listing } = useListing(props.kind)
-  const chosen = props.choices?.[props.kind]?.model ?? ''
-  const fallback = props.choices?.defaults[props.kind]
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      <span style={{ opacity: 0.7 }}>{props.label}</span>
-      <select style={{ ...selectStyle, maxWidth: 160 }} value={chosen} disabled={props.choices === undefined}
-        onChange={(e) => { props.onPick(props.kind, e.target.value) }}>
-        <option value="">{fallback === null || fallback === undefined ? props.t('noDefault') : props.t('sessionDefault', { model: fallback })}</option>
-        {optionsOf(listing, chosen).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-      </select>
-    </label>
+    <>
+      <Menu
+        open={open}
+        onClose={close}
+        items={items}
+        selectedId={pane === 'root' ? undefined : MODEL_PREFIX + chosenOf(pane)}
+        onSelect={select}
+        side="top"
+        portal
+        anchor={(
+          <button type="button" style={triggerStyle} aria-haspopup="menu" aria-expanded={open}
+            title={error === undefined ? t('pickerTitle') : t('switchFailed', { message: error })}
+            onClick={() => { if (open) close(); else setOpen(true) }}>
+            <span>{t('trigger')}</span>
+            <IconChevronDownOutlineRegular width={12} height={12} />
+          </button>
+        )}
+      />
+      {card ? <ComposeCard {...props} onClose={() => { setCard(false); reload() }} /> : null}
+    </>
   )
 }

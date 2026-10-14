@@ -15,29 +15,21 @@ import {
 import { agentRequest, directCommand, EMPTY_VALUES, type CardValues } from './card-model.ts'
 import type { Translate } from './locales.ts'
 
+// Native controls take DSH's surface and label colors; Chromium draws a
+// select's option list in them, so the list stays readable in both themes.
 const fieldStyle: CSSProperties = {
-  font: 'inherit', color: 'inherit', background: 'transparent', border: '1px solid var(--border, rgba(127,127,127,.35))',
+  font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-base)',
+  border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,.35))',
   borderRadius: 6, padding: '4px 8px', width: '100%', boxSizing: 'border-box',
 }
 const rowStyle: CSSProperties = { display: 'grid', gridTemplateColumns: '8em 1fr', alignItems: 'center', gap: 8, margin: '6px 0' }
 
-/** Props the card's slot entry receives. */
+/** What the card needs from the chat input it opens from. */
 export interface ComposeButtonProps {
   t: Translate
   sessionId: string
   inputActions: { setDraft(text: string): void; submit(): void }
   command(line: string): Promise<void>
-}
-
-/** Toolbar button that opens the generation card. */
-export function ComposeButton(props: ComposeButtonProps): ReactNode {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <Button variant="toolbar" size="sm" onClick={() => { setOpen(true) }} title={props.t('composeTitle')}>{props.t('compose')}</Button>
-      {open ? <ComposeCard {...props} onClose={() => { setOpen(false) }} /> : null}
-    </>
-  )
 }
 
 function formatCost(t: Translate, estimate: Estimate | undefined): string {
@@ -47,7 +39,8 @@ function formatCost(t: Translate, estimate: Estimate | undefined): string {
   return t('estimate', { cost: cost.min === cost.max ? t('costOne', { amount: n(cost.min) }) : t('costRange', { min: n(cost.min), max: n(cost.max) }) })
 }
 
-function ComposeCard(props: ComposeButtonProps & { onClose(): void }): ReactNode {
+/** The generation card dialog. */
+export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): ReactNode {
   const { t } = props
   const [values, setValues] = useState<CardValues>(EMPTY_VALUES)
   const [listing, setListing] = useState<ModelListing>()

@@ -7,9 +7,8 @@
  */
 
 import type { ComponentType } from 'react'
-import { ComposeButton } from './card.tsx'
 import { PICKER_DICTIONARIES, PICKER_LOCALE } from './locales.ts'
-import { InputPicker, SettingsView } from './pickers.tsx'
+import { InputControl, SettingsView } from './pickers.tsx'
 import { VIDEO_PREVIEW_ID, VIDEO_TYPES, VideoBody } from './video.tsx'
 
 /** Services this half needs. */
@@ -18,11 +17,8 @@ export const inject = ['documentPreviews', 'slots', 'locale', 'sessions']
 /** Key of this plugin's row on DSH's Plugins page: `<package>#<row id in cordis.patch.yml>`. */
 export const CONFIG_KEY = 'dsh-media-gen#media-gen'
 
-/** Id of the picker among the chat input's left controls. */
+/** Id of the media control among the chat input's left controls. */
 export const INPUT_PICKER_ID = 'dsh-media-gen.models'
-
-/** Id of the generation card's button among the chat input's left controls. */
-export const COMPOSE_ID = 'dsh-media-gen.compose'
 
 /** Locale namespace of the preview's labels. */
 const LOCALE = 'mediaGenVideo'
@@ -116,12 +112,5 @@ export function apply(ctx: ClientContext): void {
     order: 100,
     locale: PICKER_LOCALE,
     inject: (sessionId: string) => ({ command: (line: string) => runCommand(ctx.sessions, sessionId, line) }),
-  }, InputPicker as ComponentType<never>)), 'media-gen: model picker')
-  ctx.effect(() => ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
-    name: 'conversation.input.left',
-    id: COMPOSE_ID,
-    order: 99,
-    locale: PICKER_LOCALE,
-    inject: (sessionId: string) => ({ command: (line: string) => runCommand(ctx.sessions, sessionId, line) }),
-  }, ComposeButton as ComponentType<never>)), 'media-gen: generation card')
+  }, InputControl as ComponentType<never>)), 'media-gen: chat input control')
 }
