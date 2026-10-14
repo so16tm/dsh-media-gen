@@ -32,14 +32,22 @@ function describeSpec(spec: ParameterSpec): string {
   }
 }
 
+/** Working-directory service of DSH 0.2.1 and later; absent in 0.2.0. */
+interface WorkingDirectoryService {
+  ensure(agent: unknown, signal?: AbortSignal): Promise<string>
+}
+
 /**
- * Resolve the session working directory; a deployment without the service
- * falls back to the Host process directory.
+ * Resolve the session working directory. DSH 0.2.1 provides a
+ * `workingDirectory` service; 0.2.0 records it on the session header. A
+ * deployment with neither falls back to the Host process directory.
  */
 async function workingDirectory(ctx: Context, exec: ToolExecution): Promise<string> {
-  const service = ctx.get('workingDirectory')
-  if (service !== undefined && exec.agent !== undefined) return service.ensure(exec.agent, exec.signal)
-  return process.cwd()
+  const agent = exec.agent as { session?: { header?: { cwd?: unknown } } } | undefined
+  const service = (ctx as unknown as { get(name: string): unknown }).get('workingDirectory') as WorkingDirectoryService | undefined
+  if (service !== undefined && agent !== undefined) return service.ensure(agent, exec.signal)
+  const cwd = agent?.session?.header?.cwd
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
 }
 
 /**

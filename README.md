@@ -18,7 +18,7 @@ pnpm install && pnpm build
 dsh plugin --profile <profile> add /path/to/dsh-media-gen
 ```
 
-対象 DSH：`0.2.1-alpha.2`（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。
+対象 DSH：`0.2.0-rc.2` 以上 `0.3.0` 未満（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。開発と型チェックは `0.2.0-rc.2` の公開パッケージで行っています。
 
 ## 前提
 
