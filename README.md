@@ -43,6 +43,12 @@ In DSH's Models settings, add an OpenRouter provider and save its API key.
 
 ## Usage
 
+<p align="center">
+  <img src="docs/images/usage-example.webp" alt="Usage example: a Japanese chat request generates an image of a kitten and puppy, with controls to reuse the result" width="960" />
+</p>
+
+*From a chat request to a generated image, ready to reuse in another image or video. Presentation edited from a user-provided screenshot; the displayed cost is specific to this example.*
+
 ### Generation cards and chat
 
 Open **Generate…** beside the chat input and choose image/video, model, prompt, and available generation options.

@@ -26,7 +26,8 @@
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.ja.md",
-    "docs/images/readme-header.webp"
+    "docs/images/readme-header.webp",
+    "docs/images/usage-example.webp"
   ],
   "license": "MIT",
   "engines": {
