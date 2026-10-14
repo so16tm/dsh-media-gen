@@ -17,6 +17,9 @@ import {
 import {
   MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaModelCommand, type SessionModelStore,
 } from './session-models.ts'
+import {
+  IMAGE_COMMAND, IMAGE_HINT, runImageCommand, runVideoCommand, VIDEO_COMMAND, VIDEO_HINT, type DirectDeps,
+} from './direct.ts'
 import { MemoryPromptNoteStore, openPromptNoteStore, type PromptNoteStore } from './prompt-notes.ts'
 import { registerRoutes, type FetchRegistry } from './routes.ts'
 import type { StorageDomainService } from './storage.ts'
@@ -117,6 +120,9 @@ interface CommandRegistry {
   }): unknown
 }
 
+/** Command listing video jobs, without the slash. */
+const JOBS_COMMAND = 'media-jobs'
+
 /** Message source of this plugin's in-session notices. */
 const SOURCE_KIND = 'plugin:dsh-media-gen'
 
@@ -163,7 +169,8 @@ export function apply(ctx: Context, config: Config): void {
         summary: boundContextSummary(`Video job ${record.status === 'completed' ? 'finished' : record.status}: ${record.modelName}`),
       },
     })
-    if (wake && agent.status === 'idle') agent.followup(message)
+    // A job the user started with `/video` bypassed the agent, so its outcome must not start an agent turn.
+    if (wake && agent.status === 'idle' && record.origin !== 'command') agent.followup(message)
     else agent.inject(message)
     return true
   }
@@ -217,7 +224,17 @@ export function apply(ctx: Context, config: Config): void {
     })
   ctx.effect(() => async () => { await (await promptNotes).close?.() })
 
-  // `/media-model` sets the image or video model for the calling session.
+  const generateConfig = {
+    outputDir: config.outputDir,
+    maxImageBytes: config.maxImageBytes,
+    videoJobs,
+    maxWatchMs: () => config.videoMaxWatchMs.get(),
+  }
+  const direct: DirectDeps = {
+    ctx, service, config: generateConfig, sessionModels, requireApproval: () => config.requireApproval.get(),
+  }
+
+  // `/media-model` sets the session's models; `/image`, `/video`, and `/media-jobs` work without the agent.
   ;(ctx as unknown as { inject(deps: string[], fn: (c: { commands: CommandRegistry }) => void): void })
     .inject(['commands'], (c) => {
       c.commands.register({
@@ -227,6 +244,35 @@ export function apply(ctx: Context, config: Config): void {
         handler: async ({ agent, rawInput, signal }) =>
           runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal),
       })
+      c.commands.register({
+        name: IMAGE_COMMAND,
+        description: 'Generate images from your prompt as written, without the agent',
+        input: { hint: IMAGE_HINT },
+        handler: ({ agent, rawInput, signal }) => runImageCommand(direct, rawInput, { agent, signal }),
+      })
+      c.commands.register({
+        name: VIDEO_COMMAND,
+        description: 'Start a video from your prompt as written, without the agent',
+        input: { hint: VIDEO_HINT },
+        handler: ({ agent, rawInput, signal }) => runVideoCommand(direct, rawInput, { agent, signal }),
+      })
+      c.commands.register({
+        name: JOBS_COMMAND,
+        description: 'Show the video jobs of this session, or check one now',
+        input: { hint: '[job-id]' },
+        handler: async ({ agent, rawInput, signal }) => {
+          const watcher = await videoJobs
+          const id = rawInput.trim()
+          try {
+            if (id.length > 0) return { kind: 'success', text: describeJob(await watcher.check(id, signal)) }
+          } catch (error) {
+            return { kind: 'error', text: String(error) }
+          }
+          const jobs = watcher.store.list().filter(job => job.sessionId === agent.session.id)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10)
+          return { kind: 'success', text: jobs.length === 0 ? 'No video jobs in this session.' : jobs.map(describeJob).join('\n\n') }
+        },
+      })
     })
 
   // Model lists and session choices for the browser half's pickers.
@@ -234,10 +280,7 @@ export function apply(ctx: Context, config: Config): void {
     .inject(['connection'], (c) => { registerRoutes(c.connection.fetch, service, sessionModels) })
 
   registerTools(ctx, service, {
-    outputDir: config.outputDir,
-    maxImageBytes: config.maxImageBytes,
-    videoJobs,
-    maxWatchMs: () => config.videoMaxWatchMs.get(),
+    ...generateConfig,
     sessionModels,
     promptNotes,
   })

@@ -77,6 +77,33 @@ describe('plugin apply', () => {
     await dispose()
   })
 
+  it('generates directly with /image and /video, asking for --yes while approval is on', async () => {
+    stubNetwork()
+    const cwd = await mkdtemp(join(tmpdir(), 'media-'))
+    const agent = Object.assign(fakeAgent('s1'), { session: { id: 's1', header: { cwd } } })
+    const { ctx, commands, dispose } = fakeContext([agent])
+    apply(ctx as never, Config({}) as never)
+    const run = (name: string, rawInput: string) =>
+      commands.find(c => c.name === name)!.handler!({ agent, rawInput, signal: new AbortController().signal })
+    expect(commands.map(c => c.name)).toEqual(['media-model', 'image', 'video', 'media-jobs'])
+    const preview = await run('image', '--model g/img a red fox')
+    expect(preview).toMatchObject({ kind: 'success' })
+    expect(preview.text).toContain('about 0.04 USD')
+    expect(preview.text).toContain('--yes')
+    const saved = await run('image', '--model g/img --yes a red fox')
+    expect(saved.text).toMatch(/^Saved 1 image\(s\) from g\/img/u)
+    const video = await run('video', '--model v/vid --duration 4 --yes waves')
+    expect(video).toMatchObject({ kind: 'success' })
+    expect(video.text).toContain('job-9')
+    expect((await run('media-jobs', '')).text).toContain('job-9')
+    // The provider reports the job failed: the session hears of it without an agent turn.
+    expect((await run('media-jobs', 'job-9')).text).toContain('policy')
+    expect(agent.followed).toHaveLength(0)
+    expect(agent.injected).toHaveLength(1)
+    expect(await run('video', '--duration 4 x')).toMatchObject({ kind: 'error' })
+    await dispose()
+  })
+
   it('saves prompt notes and shows them with the model listing', async () => {
     stubNetwork()
     const { ctx, tools, dispose } = fakeContext()

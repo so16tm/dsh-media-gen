@@ -35,6 +35,8 @@ export interface VideoJobRecord {
   params: Record<string, string | number | boolean>
   /** Session that asked for the video, when known. */
   sessionId?: string
+  /** Who started the job: the agent's tool call or the user's `/video` command. Absent on older records. */
+  origin?: 'agent' | 'command'
   /** Absolute directory the outputs are written to. */
   dir: string
   status: JobStatus

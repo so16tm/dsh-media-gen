@@ -5,13 +5,13 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { describeJob, type VideoJobRecord, type VideoJobWatcher } from './jobs.ts'
+import { runImagePlan, sessionIdOf, startVideoPlan, type GenerateConfig, type ImageToolValue } from './generate.ts'
+import { describeJob, type VideoJobRecord } from './jobs.ts'
 import type { ParameterSpec } from './openrouter.ts'
-import { resolveOutputDir, saveImages } from './output.ts'
 import { MAX_NOTE_CHARS, type PromptNoteStore } from './prompt-notes.ts'
 import { withSessionModel, type MediaKind, type SessionModelStore } from './session-models.ts'
 import type { MediaService } from './service.ts'
@@ -34,20 +34,13 @@ const PROMPT_GUIDE = 'Write the prompt for the chosen model from what the user w
 const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
   + '(%s), ask the user once before generating, with ask_user_question when available, instead of guessing.'
 
-/** Prompt excerpt stored with a video job. */
-const PROMPT_EXCERPT = 200
-
 /** Most jobs one status listing shows. */
 const STATUS_LIMIT = 20
 
-/** Output settings the image tool needs. */
-export interface ToolConfig {
-  outputDir: string
-  maxImageBytes: number
-  /** Video job watcher, ready once job storage has opened. */
-  videoJobs: Promise<VideoJobWatcher>
-  /** How long a submitted job is watched before polling stops. */
-  maxWatchMs: () => number
+export { sessionIdOf, type ImageToolValue } from './generate.ts'
+
+/** Settings and stores the tools need. */
+export interface ToolConfig extends GenerateConfig {
   /** Per-session model choices, ready once their storage has opened. */
   sessionModels: Promise<SessionModelStore>
   /** Prompt-writing notes by model id, ready once their storage has opened. */
@@ -67,12 +60,6 @@ export async function sessionArgs<A extends { model?: string | undefined; provid
   return withSessionModel(args, (await store).get(sessionId)?.[kind])
 }
 
-/** Session id of the calling agent, when the tool runs inside one. */
-export function sessionIdOf(exec: Pick<ToolExecution, 'agent'>): string | undefined {
-  const id = (exec.agent as { session?: { id?: unknown } } | undefined)?.session?.id
-  return typeof id === 'string' && id.length > 0 ? id : undefined
-}
-
 function describeSpec(spec: ParameterSpec): string {
   switch (spec.kind) {
     case 'enum': return spec.values.join('|')
@@ -80,24 +67,6 @@ function describeSpec(spec: ParameterSpec): string {
     case 'boolean': return 'true|false'
     case 'any': return 'any'
   }
-}
-
-/** Working-directory service of DSH 0.2.1 and later; absent in 0.2.0. */
-interface WorkingDirectoryService {
-  ensure(agent: unknown, signal?: AbortSignal): Promise<string>
-}
-
-/**
- * Resolve the session working directory. DSH 0.2.1 provides a
- * `workingDirectory` service; 0.2.0 records it on the session header. A
- * deployment with neither falls back to the Host process directory.
- */
-async function workingDirectory(ctx: Context, exec: ToolExecution): Promise<string> {
-  const agent = exec.agent as { session?: { header?: { cwd?: unknown } } } | undefined
-  const service = (ctx as unknown as { get(name: string): unknown }).get('workingDirectory') as WorkingDirectoryService | undefined
-  if (service !== undefined && agent !== undefined) return service.ensure(agent, exec.signal)
-  const cwd = agent?.session?.header?.cwd
-  return typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
 }
 
 /**
@@ -202,27 +171,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     timeoutMs: 600_000,
     async execute(args, exec) {
       const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', args, exec), exec.signal)
-      const cwd = await workingDirectory(ctx, exec)
-      const dir = resolveOutputDir(cwd, config.outputDir)
-      const result = await service.generate(plan, args.prompt, exec.signal)
-      const attachments: AttachmentStore | undefined = ctx.get('attachments')
-      const { saved, attachmentFailures } = await saveImages(result.images.map(i => i.data), {
-        dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
-      })
-      const value: ImageToolValue = {
-        provider: plan.provider.id,
-        model: plan.model.id,
-        images: saved.map(s => ({
-          path: s.path,
-          mediaType: s.mediaType,
-          bytes: s.bytes,
-          ...s.attachment === undefined ? {} : { attachment: s.attachment as unknown as Record<string, unknown> },
-        })),
-        costUsd: result.costUsd,
-        staleCatalog: plan.staleCatalog,
-        attachmentFailures,
-      }
-      return value as never
+      return await runImagePlan(ctx, service, config, plan, args.prompt, exec) as never
     },
   }))
 
@@ -250,39 +199,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     },
     async execute(args, exec) {
       const plan = await service.planVideo(await sessionArgs(config.sessionModels, 'video', args, exec), exec.signal)
-      const cwd = await workingDirectory(ctx, exec)
-      const dir = resolveOutputDir(cwd, config.outputDir)
-      const watcher = await config.videoJobs
-      const state = await service.submitVideo(plan, args.prompt, exec.signal)
-      const now = new Date()
-      const estimate = service.estimateVideo(plan)
-      const sessionId = sessionIdOf(exec)
-      const record: VideoJobRecord = {
-        id: state.id,
-        providerId: plan.provider.id,
-        model: plan.model.id,
-        modelName: plan.model.name,
-        prompt: args.prompt.slice(0, PROMPT_EXCERPT),
-        params: plan.params,
-        ...sessionId === undefined ? {} : { sessionId },
-        dir,
-        status: state.status,
-        createdAt: now.toISOString(),
-        updatedAt: now.toISOString(),
-        watchUntil: new Date(now.getTime() + config.maxWatchMs()).toISOString(),
-        ...estimate === undefined ? {} : { estimate },
-        outputs: state.outputs,
-        files: [],
-        delivered: false,
-        failures: 0,
-      }
-      // The job is already billed at the provider, so a storage failure must not hide its id.
-      try {
-        await watcher.add(record)
-      } catch (error) {
-        return { ...record, status: 'stopped', error: `the job could not be recorded for watching: ${String(error)}` } as never
-      }
-      return record as never
+      return await startVideoPlan(ctx, service, config, plan, args.prompt, exec, 'agent') as never
     },
   }))
 
@@ -352,16 +269,6 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
         : { model: args.model.trim(), notes: saved.notes, updatedAt: saved.updatedAt, durable: notes.durable }) as never
     },
   }))
-}
-
-/** Canonical value of one image generation. */
-export interface ImageToolValue {
-  provider: string
-  model: string
-  images: { path: string; mediaType: string; bytes: number; attachment?: Record<string, unknown> }[]
-  costUsd: number | null
-  staleCatalog: boolean
-  attachmentFailures: number
 }
 
 /**
