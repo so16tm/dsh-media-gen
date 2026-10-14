@@ -37,6 +37,10 @@ const MODEL_GUIDE = 'Omit model to use the model the user selected; the selectio
   + 'exists, tell them to switch it in the chat input\'s Media menu or with /media-model. Never switch on your own to a model you prefer.'
 
 /** When details are missing; shared by both generation tools. */
+/** Generation is billed, so a finished call is never followed by another on the agent's own judgment. */
+const ONCE_GUIDE = 'One user request means one call: once it returns, do not call again on your own to retry, improve, fix, '
+  + 'or vary the result, even if it misses the request. Show the result, say what differs, and let the user decide.'
+
 const ASK_GUIDE = 'If the request leaves out something that changes the result and cannot be inferred '
   + '(%s), ask the user once before generating, with ask_user_question when available, instead of guessing.'
 
@@ -178,7 +182,8 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     description: 'Generate images from a text prompt with an image model of a configured provider. '
       + 'The images are saved under the working directory and shown to the user; each call may cost money, '
       + 'so do not call it repeatedly without the user asking. Use media_list_models to find model ids and the '
-      + 'aspect_ratio/resolution values a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' ' + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
+      + 'aspect_ratio/resolution values a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' ' + ONCE_GUIDE + ' '
+      + ASK_GUIDE.replace('%s', 'subject, aspect ratio'),
     parameters: {
       prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
       model: { type: 'string', description: 'Image model id; omit to use the model the user selected. A model chosen for this session in the chat input overrides it.' },
@@ -215,7 +220,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'Generation runs in the background and can take minutes; this returns a job id at once, and the session is '
       + 'notified when the video is saved under the working directory. Each call may cost money, so do not call it '
       + 'repeatedly without the user asking, and do not poll the job. Use media_list_models with kind "video" to find '
-      + 'model ids and the durations, resolutions, and aspect ratios a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' '
+      + 'model ids and the durations, resolutions, and aspect ratios a model accepts. ' + MODEL_GUIDE + ' ' + PROMPT_GUIDE + ' ' + ONCE_GUIDE + ' '
       + ASK_GUIDE.replace('%s', 'subject, length, aspect ratio, whether to include audio'),
     parameters: {
       prompt: { type: 'string', required: true, description: 'The prompt sent to the video model, written for that model as described above.' },
@@ -330,6 +335,8 @@ export function renderImageResult(value: ImageToolValue): ContentBlock[] {
     `Cost: ${value.costUsd === null ? 'not reported' : `${value.costUsd} USD`}.`,
     'In your reply, show each image with Markdown such as ![short description](<path>), using the path above, so it '
       + 'appears in the reply itself; to hand a file over as a deliverable, call the present tool with its path.',
+    'This request is done. Do not generate again unless the user asks, even if the image misses the request; '
+      + 'say what differs and let the user decide.',
   ]
   if (value.attachmentFailures > 0) lines.push(`${value.attachmentFailures} image(s) could not be attached inline; the files are saved.`)
   const blocks: ContentBlock[] = [{ type: 'text', text: lines.join('\n') }]
