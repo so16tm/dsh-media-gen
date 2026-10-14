@@ -1,6 +1,6 @@
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CapabilityCatalog, estimateImageCost } from '../src/catalog.ts'
 import { formatCost, localized, t } from '../src/messages.ts'
@@ -109,7 +109,7 @@ describe('output', () => {
   })
 
   it('keeps the output directory inside the working directory', () => {
-    expect(resolveOutputDir('/w', 'generated-media')).toBe('/w/generated-media')
+    expect(resolveOutputDir('/w', 'generated-media')).toBe(resolve('/w', 'generated-media'))
     expect(() => resolveOutputDir('/w', '../x')).toThrow()
     expect(() => resolveOutputDir('/w', '/tmp')).toThrow()
   })
