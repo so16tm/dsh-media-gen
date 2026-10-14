@@ -6,12 +6,14 @@
  */
 
 import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { open, realpath, stat } from 'node:fs/promises'
+import { dirname, isAbsolute, normalize, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { MediaError } from './errors.ts'
 import type { VideoJobWatcher } from './jobs.ts'
 import type { MediaFileIndex } from './media-files.ts'
 import type { ImageModel, ParameterSpec } from './openrouter.ts'
+import { sniffImage } from './output.ts'
 import type { MediaService } from './service.ts'
 import { withSessionModel, type SessionModelStore } from './session-models.ts'
 import type { VideoModel } from './video.ts'
@@ -208,6 +210,43 @@ export async function handleEstimate(service: MediaService, store: SessionModelS
 export interface MediaSources {
   files: Promise<MediaFileIndex>
   jobs: Promise<VideoJobWatcher>
+  /** The configured output directory, relative to a working directory (`generated-media`). */
+  outputDir?: string
+}
+
+/** Whether `dir` ends with the output directory's path segments. Windows paths compare without case. */
+export function inOutputDir(dir: string, outputDir: string): boolean {
+  const fold = (p: string) => (sep === '\\' ? p.toLowerCase() : p)
+  const want = normalize(outputDir).split(/[\\/]+/u).filter(part => part !== '' && part !== '.')
+  if (want.length === 0 || want.includes('..')) return false
+  const have = normalize(dir).split(/[\\/]+/u)
+  if (have.length <= want.length) return false
+  return want.every((part, i) => fold(have[have.length - want.length + i]!) === fold(part))
+}
+
+/**
+ * Media type of an image directly inside an output directory, for images the
+ * plugin saved before it kept its file index. The real path, after links,
+ * must still be inside such a directory, and the file must be an image by
+ * its signature, so the route serves nothing but generated-looking images.
+ */
+async function outputDirImage(path: string, outputDir: string | undefined): Promise<string | undefined> {
+  if (outputDir === undefined || !isAbsolute(path) || normalize(path) !== path) return undefined
+  if (!inOutputDir(dirname(path), outputDir)) return undefined
+  try {
+    const real = await realpath(path)
+    if (!inOutputDir(dirname(real), outputDir)) return undefined
+    const handle = await open(real, 'r')
+    try {
+      const head = new Uint8Array(16)
+      const { bytesRead } = await handle.read(head, 0, head.length, 0)
+      return sniffImage(head.subarray(0, bytesRead))
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return undefined
+  }
 }
 
 /** Media type of a file this plugin saved, or undefined for any other path. */
@@ -218,12 +257,13 @@ async function savedMediaType(sources: MediaSources, path: string): Promise<stri
     const file = job.files.find(f => f.path === path)
     if (file !== undefined) return file.mediaType
   }
-  return undefined
+  return await outputDirImage(path, sources.outputDir)
 }
 
 /**
- * Serve one generated file. Only files this plugin saved are served, so the
- * route cannot read anything else on the machine. Video players seek with
+ * Serve one generated file. Only files this plugin saved, or images directly
+ * inside an output directory, are served, so the route cannot read anything
+ * else on the machine. Video players seek with
  * `Range`, which is answered with 206.
  */
 export async function handleFile(sources: MediaSources, request: Request): Promise<Response> {

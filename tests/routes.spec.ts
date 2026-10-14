@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { OpenRouterAdapter } from '../src/openrouter.ts'
 import { ProviderBridge } from '../src/provider-bridge.ts'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MemoryMediaFileIndex } from '../src/media-files.ts'
 import type { VideoJobWatcher } from '../src/jobs.ts'
-import { ESTIMATE_PATH, handleEstimate, handleFile, handleJob, handleModels, handleSession, MODELS_PATH, registerRoutes, SESSION_PATH, type FetchRegistry } from '../src/routes.ts'
+import { ESTIMATE_PATH, handleEstimate, handleFile, handleJob, handleModels, handleSession, inOutputDir, MODELS_PATH, registerRoutes, SESSION_PATH, type FetchRegistry } from '../src/routes.ts'
 import { MediaService } from '../src/service.ts'
 import { MemorySessionModelStore } from '../src/session-models.ts'
 
@@ -128,5 +128,29 @@ describe('media file and job routes', () => {
     const reported = await handleJob(media, new Request('http://host/api/media-gen.job?id=job-1'))
     expect(await reported.json()).toEqual({ id: 'job-1', model: 'V', status: 'completed', files: [{ path: video, mediaType: 'video/mp4' }] })
     expect((await handleJob(media, new Request('http://host/api/media-gen.job?id=nope'))).status).toBe(404)
+  })
+  it('serves unindexed images only when they sit directly in an output directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-out-'))
+    const out = join(root, 'generated-media')
+    await mkdir(join(out, 'nested'), { recursive: true })
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2])
+    await writeFile(join(out, 'old.png'), png)
+    await writeFile(join(out, 'notes.png'), 'not an image')
+    await writeFile(join(out, 'nested', 'deep.png'), png)
+    await writeFile(join(root, 'outside.png'), png)
+    await symlink(join(root, 'outside.png'), join(out, 'link.png'))
+    const empty = { list: () => [] }
+    const media = { files: Promise.resolve(new MemoryMediaFileIndex()), jobs: Promise.resolve({ store: empty } as unknown as VideoJobWatcher), outputDir: 'generated-media' }
+    const status = async (path: string) =>
+      (await handleFile(media, new Request(`http://host/api/media-gen.file?path=${encodeURIComponent(path)}`))).status
+    expect(await status(join(out, 'old.png'))).toBe(200)
+    expect(await status(join(out, 'notes.png'))).toBe(404)
+    expect(await status(join(out, 'nested', 'deep.png'))).toBe(404)
+    expect(await status(join(root, 'outside.png'))).toBe(404)
+    expect(await status(join(out, 'link.png'))).toBe(404)
+    expect(await status(`${out}/../outside.png`)).toBe(404)
+    expect(await status('generated-media/old.png')).toBe(404)
+    expect(inOutputDir('/w/a/b', 'a/b')).toBe(true)
+    expect(inOutputDir('/w/a/b', '../b')).toBe(false)
   })
 })

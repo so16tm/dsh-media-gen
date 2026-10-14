@@ -330,7 +330,7 @@ export function apply(ctx: Context, config: Config): void {
     .inject(['connection'], (c) => {
       registerRoutes(c.connection.fetch, service, sessionModels, () => ({
         image: config.chatImageModels.get(), video: config.chatVideoModels.get(),
-      }), () => config.requireApproval.get(), { files: mediaFiles, jobs: videoJobs })
+      }), () => config.requireApproval.get(), { files: mediaFiles, jobs: videoJobs, outputDir: config.outputDir })
     })
 
   registerTools(ctx, service, {
