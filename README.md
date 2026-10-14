@@ -1,170 +1,221 @@
 <p align="center">
-  <img src="docs/images/readme-header.webp" alt="dsh-media-gen — 画像と動画を、会話から" width="960" />
+  <img src="docs/images/readme-header.webp" alt="dsh-media-gen — Images and videos, from chat" width="960" />
 </p>
 
 # dsh-media-gen
 
-DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。DSH に設定済みのプロバイダーと認証情報をそのまま使い、API キーを二重に登録させません。
+[English](README.md) | [日本語](README.ja.md)
 
-- 方針：[docs/policy.md](docs/policy.md)
-- 段階0 接続調査：[docs/investigation.md](docs/investigation.md)
+An image and video generation plugin for DeepSeek Harness (DSH). It reuses the providers and credentials configured in DSH, so you do not need to register API keys twice.
 
-## 現在の状態（段階3：画面側と使い方の整理）
+- [Design policy](docs/policy.md) (Japanese)
+- [Initial integration investigation](docs/investigation.md) (Japanese)
 
-- 画像：OpenRouter の Image API（`/images/models`、`/images`）で生成します。DSH 0.2.0-rc.2（Windows）の実機で、実通信による生成を確認済みです。
-- 動画：OpenRouter の Video API（`/videos/models`、`/videos`）にジョブを登録し、裏で状態を確認して、完成したら作業ディレクトリに保存してセッションに知らせます。DSH 0.2.0-rc.2 の実機で生成と保存を確認済みです。
-- 画面側（動画プレビュー、設定画面、チャット欄のモデル選択と生成カード）は、**DSH 実機での表示は未検証**です。
-- 単体テストはモック通信で行っています。
+## Features
 
-## 2 つの使い方
+- **Images:** generates through OpenRouter's Image API (`/images/models`, `/images`). Real API generation has been verified on DSH `0.2.0-rc.2` on Windows.
+- **Videos:** submits jobs through OpenRouter's Video API (`/videos/models`, `/videos`), watches them in the background, saves completed videos in the working directory, and notifies the session. Generation and saving have been verified on DSH `0.2.0-rc.2`.
+- **Browser integration:** video previews, settings, chat model selectors, generation cards, and inline media displays. **Their appearance in a running DSH instance has not been verified.**
+- Unit tests use mocked network requests.
 
-| | ①エージェント経由 | ②直接生成 |
-|---|---|---|
-| 入口 | チャットで依頼する、または生成カードの「エージェントに頼む」 | `/image`・`/video`、または生成カードの「そのまま生成」 |
-| プロンプト | エージェントが依頼の意図とモデルの書き方メモから組み立てます。翻訳や書き換えの判断もエージェントに任せます | 書いた文をそのままモデルに送ります |
-| 確認 | 承認ダイアログに実際に送るプロンプトと概算料金を出します | カードに概算料金を出します。打ち込む場合は、`--yes` なしだと概算だけを返します |
-| 足りない情報 | サイズや長さなどが依頼から読み取れないとき、エージェントが DSH の質問カードで聞きます | 指定しなかった項目はモデルの既定値になります |
+### Languages
 
-### 書き方メモ
+Approval dialogs, the plugin name, and browser UI support English and Japanese. They use Japanese when the DSH language is `ja`, and English otherwise. Tool descriptions and video completion notifications sent to the agent are English; the agent reads the notification and replies in the user's language. Command responses are currently English.
 
-モデルごとに「英語のみ」「自然言語」「タグ列」などのプロンプトの書き方を自由記述で保存できます。OpenRouter はこの情報を提供していないため、プラグインには同梱せず、必要になったら「このモデルの書き方メモを追加して」とエージェントに頼みます。エージェントは調べた内容を `media_set_prompt_notes` で保存し、以後は `media_list_models` の結果と一緒に読みます。メモは DSH のストレージに保存し、再起動しても残ります。
+## Compatibility
 
-### 生成カード
+See [CHANGELOG.md](CHANGELOG.md) for changes in each release.
 
-チャット欄の左の「生成…」から開きます。画像か動画かを選び、内容、モデル、縦横比、解像度、長さ、音声を入力します。選べる値は、選んだモデルの一覧から出します。この会話でチャット欄のモデルを選んでいるときに、カードで別のモデルを選んで「エージェントに頼む」を押すと、この会話のモデルもカードのモデルに切り替えます。エージェントのツールはこの会話のモデルを優先するので、2 つのボタンのどちらでもカードのモデルで生成するためです。
-
-### 直接生成コマンド
-
-| 入力 | 内容 |
+| Plugin | Supported DSH |
 |---|---|
-| `/image [--model id] [--aspect 1:1] [--resolution 1K] [--count n] [--seed n] [--image パス]... [--yes] <プロンプト>` | 画像を生成して `generated-media/` に保存します。`--image` は入力画像で、複数回書けます |
-| `/video [--model id] [--duration 秒] [--aspect 16:9] [--resolution 720p] [--audio on\|off] [--seed n] [--first パス] [--last パス] [--ref パス]... [--yes] <プロンプト>` | 動画のジョブを登録します。`--first`・`--last` は最初と最後のフレーム、`--ref` は参照画像です |
-| `/media-jobs [ジョブ ID]` | このセッションの動画ジョブを一覧します。ID を渡すとその場で状態を確認します |
+| `v0.1.0` | `0.2.x` from `0.2.0-rc.2` onward (verified: `0.2.0-rc.2`) |
 
-オプションはプロンプトより前に書きます。空白を含むパスは `"` で囲みます。`requireApproval` が有効なら、`--yes` を付けたときだけ生成します。`/video` で始めたジョブが終わっても、エージェントのターンは起こしません。知らせは次のターンでエージェントに届くので、すぐに知りたいときは `/media-jobs` で確認します。
+## Installation
 
-## 対応バージョン
-
-プラグインの版ごとの対応 DSH は次のとおりです（各版の変更点は [CHANGELOG.md](./CHANGELOG.md)）。
-
-| プラグイン | 対応 DSH |
-|---|---|
-| `v0.1.0` | `0.2.0-rc.2` 以降の `0.2.x`（確認済み：`0.2.0-rc.2`） |
-
-## インストール
-
-使っている DSH に対応する版のタグを指定して、リポジトリから直接入れます。ビルド済みの `lib/` をリポジトリに含めているので、手元での clone やビルド、pnpm のビルド許可（`allowBuilds`）は要りません。
+Install a tag compatible with your DSH version. The repository includes the built `lib/` files; cloning, building locally, and pnpm build approvals (`allowBuilds`) are unnecessary.
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git#v0.1.0
+dsh plugin --profile web add 'git+https://github.com/so16tm/dsh-media-gen.git#v0.1.0'
 ```
 
-- リポジトリは非公開なので、PC の git が GitHub にサインインできている必要があります（Windows なら Git Credential Manager）。
-- 更新するときは、削除せずに新しい版のタグで同じ `add` を実行し、DSH を再起動します。入っている版が新しい版に置き換わります。
-- タグを付けずに指定すると、まだ版として公開していない `main` の最新が入ります。DSH はプロファイルの `package.json` に `#` 以下を残さないため、タグを付けて入れたあとも、タグなしで入れ直すと `main` の最新になります。版を固定したいときは、タグを付けた `add` で入れ替えてください。
-- 使うのをやめるときは `dsh plugin --profile <profile> remove dsh-media-gen` です。
+`web` is an example profile. Replace it with your profile name if different.
 
-## 前提
+- This repository is private. Your local git must be authenticated with GitHub (for example, through Git Credential Manager on Windows).
+- To update, run the same `add` command with the new release tag and restart DSH. The installed version is replaced; removal first is unnecessary.
+- Without a tag, the command installs the latest `main`, including unreleased changes. DSH does not preserve the `#...` suffix in the profile's `package.json`; reinstalling without a tag therefore installs `main` even after a tagged installation. Use a tagged `add` command when you need a specific release.
 
-DSH の Models 設定で OpenRouter のプロバイダーを追加し、API キーを保存しておきます。ルート名が `openrouter`、または Base URL のホストが `openrouter.ai` のプロバイダーを画像生成に使います。
-
-## ツール
-
-| ツール | 内容 |
-|---|---|
-| `media_list_models` | 設定済みプロバイダーの画像モデル（`kind: "video"` なら動画モデル）と、各モデルが受け付けるパラメーターを一覧します |
-| `media_generate_image` | 画像を生成し、作業ディレクトリの `generated-media/` に保存して添付として表示します |
-| `media_generate_video` | 動画の生成ジョブを登録し、すぐにジョブ ID を返します。完成すると `generated-media/` に保存し、セッションに知らせます |
-| `media_video_status` | 動画ジョブの一覧を表示します。`job_id` を渡すと、その場でプロバイダーに状態を確認します |
-| `media_get_prompt_notes` | 保存した書き方メモを読みます |
-| `media_set_prompt_notes` | モデルの書き方メモを保存します。空にすると消します |
-
-## セッションごとのモデル
-
-チャットで `/media-model` を使うと、そのセッションで使う画像・動画のモデルを切り替えられます。ツールの呼び出しでモデルを指定しなかったときは、セッションの選択、設定の既定値の順に使います。
-
-| 入力 | 内容 |
-|---|---|
-| `/media-model` | いまの選択と既定値を表示します |
-| `/media-model image` | 使える画像モデルの ID を一覧します（`video` なら動画モデル） |
-| `/media-model image <モデル ID> [プロバイダー]` | このセッションの画像モデルを選びます。一覧にない ID は受け付けません |
-| `/media-model image default` | このセッションの選択を消し、設定の既定値に戻します |
-
-選択は DSH のストレージにセッション ID ごとに記録し、再起動しても残ります。コマンドの応答は今のところ英語です。
-
-チャット欄の左側にも「画像」「動画」の選択欄を出します。選ぶと `/media-model` と同じ処理を行います。
-
-## 画面側（ブラウザー）
-
-`lib/client.js` を DSH の画面に読み込ませ、次の 5 つを追加します。
-
-- 動画プレビュー：mp4・m4v・webm・mov を DSH のファイルプレビューで再生します。DSH が丸ごと読み込める大きさ（32 MiB）までです。
-- 設定画面：プラグイン画面の「dsh-media-gen」の設定から、既定の画像・動画モデルをプロバイダーの一覧から選べます。最大枚数や秒数、承認・通知の有無も変更できます。
-- チャット欄の選択欄：上記のとおりです。
-- 生成カード：上記の「2 つの使い方」のとおりです。
-- 会話の中の表示：`media_generate_image`・`media_generate_video` の呼び出しと `/image`・`/video` の結果の行に、生成した画像と動画を表示します。画像を押すと DSH のファイルプレビューで開きます。エージェントが画像を生成したターンでは、返答の下にも生成した画像を小さく並べ、同じボタンを付けます。画像の下の「画像生成に使う」「動画生成に使う」は、その画像を入力画像（動画は最初のフレーム）にした生成カードを開きます。カードのモデル欄には、入力画像を使えるモデルだけを出します。「チャットに使う」は、画像のパスを入力欄の下書きに入れます。下書きは置き換わります。動画は、ジョブが終わるまでその行で状態を確かめ、保存されたら再生できるようにします。DSH の汎用ツールカードの代わりに、これらの名前の行だけを置き換えます。
-
-モデルの一覧と概算料金は、Host 側の認証つきルート `api/media-gen.models`、`api/media-gen.session`、`api/media-gen.estimate` から読みます。生成した画像と動画は `api/media-gen.file`（`Range` 対応）、動画ジョブの状態は `api/media-gen.job` から読みます。ファイルのルートは、このプラグインが保存したファイルと、名前が出力先（`outputDir`、既定は `generated-media`）と同じフォルダーの直下にある画像しか返しません。後者は、ファイルの記録を始める前に保存した画像を表示するためのもので、どの作業ディレクトリのものかは区別しません。リンクをたどった先も同じ名前のフォルダーの直下にあり、中身が PNG・JPEG・WebP・GIF の画像であるものに限ります。このため `outputDir` には `Pictures` のような一般的な名前を使わないでください。API キーはブラウザーに渡しません。
-
-## 動画ジョブ
-
-- 登録したジョブは DSH のストレージ（storage domain）に記録します。DSH を再起動しても、未完了のジョブの確認を再開します。ストレージが使えない環境ではメモリーにだけ記録し、再起動すると追跡できなくなります。
-- `videoPollIntervalMs` ごとに状態を確認し、完成したらすぐに動画をダウンロードします。OpenRouter 側の保持期間は公開されていないためです。
-- 完成・失敗・期限切れは、ジョブを登録したセッションに知らせます。セッションが閉じていたら、次にそのセッションを開いたときに知らせます。
-- `videoMaxWatchMs` を過ぎても終わらないジョブは、確認を止めて「停止」と表示します。OpenRouter には取り消しの API がないため、これはジョブの取り消しではありません。`media_video_status` に `job_id` を渡すと確認を再開します。
-- 会話ごとの許可：DSH の承認ダイアログは「拒否」と「一度だけ許可」しか選べないため、会話単位の許可はチャット欄の「画像・動画」メニューの「生成前の確認」か `/media-approval on` で切り替えます。許可した会話では、エージェント経由の生成も `/image`・`/video`（`--yes` なし）も確認なしで実行します。`/media-approval off` で毎回の確認に戻ります。この切り替えはユーザーだけができ、エージェントからは変えられません。
-- 入力画像：エージェントは `media_generate_image` の `input_images`、`media_generate_video` の `first_frame`・`last_frame`・`reference_images` に、画像のパスを渡します。ファイルは送信前に読み込み、PNG・JPEG・WebP・GIF で 20 MiB 以下のものだけを Base64 の data URL で送ります。一覧で入力画像やそのフレームを受け付けないとされているモデルには、送る前に断ります。入力画像 1 枚ごとに課金するモデルは、その分を概算料金に足します。承認ダイアログには入力画像のパスも出します。作業ディレクトリの外にある画像を送るときは、`requireApproval` がオフでも、会話で許可していても、必ず確認します。
-- 同じ依頼（エージェントの 1 ターン）の中で 2 回目以降の生成を呼んだときは、`requireApproval` がオフでも、会話で許可していても、必ず確認します。エージェントが自分の判断で再生成するのを防ぐためです。`media_generate_image` は 1 枚につき 1 つのプロンプトを並べた `prompts` を受け取り、その件数だけ 1 枚ずつ生成します。「ポーズを変えて 3 枚」なら 3 つのプロンプトの 1 回の呼び出しになり、確認も 1 回です。2 枚以上を頼むときに、複数の違う画像を 1 つのプロンプトに並べていると、課金前に断ります（1 枚の画像に全部が並ぶのを防ぐため）。`/image` の `--count` は、同じプロンプトの複製です。生成の結果は、画像がもうチャットに表示されていることをエージェントに伝え、ファイルを開いて読んだり、生成するかを聞き直したりしないよう求めます。「画像を作ってから動画にして」のような続きの作業は、同じ依頼の中で続けられます（2 回目の生成は確認が出ます）。2 枚目以降が失敗したときは、それまでに保存した画像を結果として返し、失敗をあわせて伝えます。タイムアウトや使えない応答のあとは、プロバイダー側で課金されている可能性があるため、エージェントに自分で再試行しないよう伝えます。
-- 生成前の承認ダイアログには、モデル一覧の `pricing_skus` から求めた概算料金を出します。秒単位の料金なら秒数を掛け、解像度や長さが決まらないときは幅で示します。料金の形式を読み取れないときは「不明」と表示します。モデル一覧の取得などに失敗して概算できないときも、確認なしでは通さず、概算できなかったことを示して確認します。概算料金は出力の料金から求めるため、入力画像やトークンにも課金するモデルでは実際より安く出ることがあります。
-- 秒数を指定しない動画では、モデルが `maxVideoSeconds` を超える長さも選べる場合、上限以内でいちばん長い秒数を指定して送ります。モデルが秒数の一覧を出していないときは、この上限をかけられません。
-- `media_set_prompt_notes` で書き方メモを保存するときは、以後のすべての会話のエージェントが読むため、内容を示して必ず確認します。
-- 承認の判定は `tools/pre-execute` のいちばん外側で行います。ほかの仕組みが確認を省いて許可した生成は、DSH のガード（`tools.guard`）で止めます。
-
-## 設定
-
-| 項目 | 既定値 | 内容 |
-|---|---|---|
-| `defaultImageProvider` | なし | 既定の DSH プロバイダー ID |
-| `defaultImageModel` | なし | 既定の画像モデル ID |
-| `maxImagesPerCall` | 4 | 1 回あたりの最大枚数 |
-| `defaultVideoProvider` | なし | 動画生成に使う既定の DSH プロバイダー ID |
-| `defaultVideoModel` | なし | 既定の動画モデル ID |
-| `maxVideoSeconds` | 10 | 1 回あたりの動画の最大秒数 |
-| `requireApproval` | true | 生成のたびに、概算料金つきで承認を求めます |
-| `outputDir` | `generated-media` | 保存先（作業ディレクトリからの相対パス） |
-| `catalogTtlMs` | 600000 | モデル一覧のキャッシュ期間 |
-| `requestTimeoutMs` | 180000 | プロバイダー呼び出しのタイムアウト |
-| `maxImageBytes` | 31457280 | 受け付ける画像の最大サイズ |
-| `videoPollIntervalMs` | 30000 | 動画ジョブの状態を確認する間隔 |
-| `videoMaxWatchMs` | 10800000 | 動画ジョブの確認を続ける時間（3 時間） |
-| `maxVideoBytes` | 524288000 | 受け付ける動画の最大サイズ |
-| `notifyOnVideoCompletion` | true | 動画ジョブが終わったらセッションに知らせます |
-| `chatImageModels` | なし | チャット欄のメニューに出す画像モデル ID。空なら一覧のすべてを出します |
-| `chatVideoModels` | なし | チャット欄のメニューに出す動画モデル ID。空なら一覧のすべてを出します |
-
-設定画面は、DSH の「プラグイン」→「メディア生成」→「コンポーネント」の行の「メディア生成 >」から開きます。チャット欄に出すモデルは、検索欄つきのチェックリストで選びます。選んでいても、チャット欄のメニューの「すべてのモデル…」から一覧外のモデルを選べます。エージェントが使う `media_list_models` は、この設定にかかわらず全モデルを返します。
-
-## 言語
-
-承認ダイアログ（画像・動画）、プラグイン名、画面側の表示（動画プレビュー・設定画面・選択欄）は英語と日本語に対応しています。DSH の言語が `ja` のとき日本語、それ以外は英語で表示します。モデルに渡すツール説明と、動画ジョブの完了通知の本文は英語です。完了通知はモデルが読み、ユーザーの言語で返答します。
-
-## 開発
+To remove the plugin:
 
 ```sh
-pnpm check   # 型チェック + ビルド + テスト + CHANGELOG の節の確認
+dsh plugin --profile web remove dsh-media-gen
 ```
 
-clone して `pnpm install && pnpm build` し、`dsh plugin --profile <profile> add <clone の絶対パス>` で入れて試せます。`src/` を変えたら、`pnpm build` で `lib/` を作り直して一緒にコミットします。
+### Provider setup
 
-対象 DSH：`0.2.0-rc.2` 以上 `0.3.0` 未満（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。開発と型チェックは `0.2.0-rc.2` の公開パッケージで行っています。
+Add an OpenRouter provider in DSH's Models settings and save its API key. The plugin recognizes providers whose route name is `openrouter` or whose Base URL host is `openrouter.ai`.
 
-### 版の公開
+## Usage
 
-版は `package.json` の `version` とタグ `v<版>` で管理します。
+### Two ways to generate
 
-1. PR で `version` を上げ、[CHANGELOG.md](./CHANGELOG.md) に `## v<版>` の節（対応 DSH と変更点）を追加し、上の対応表を更新します。節がないと `pnpm check` が失敗します。
-2. PR を `main` にマージすると、CI がタグ `v<版>` と GitHub のリリースを自動で作成します。
+| | Through the agent | Direct generation |
+|---|---|---|
+| Entry point | Ask in chat, or choose **Ask the agent** on a generation card | `/image`, `/video`, or **Generate as written** on a generation card |
+| Prompt | The agent writes the prompt using your request and the model's prompt notes; it decides whether to translate or rewrite | Your text is sent unchanged |
+| Confirmation | The approval dialog shows the actual prompt and estimated cost when approval is required | The card shows estimated cost. Commands return only an estimate without `--yes` when approval is required |
+| Missing information | The agent asks with DSH question cards when it cannot infer details such as size or length | Unspecified options use model defaults |
 
-タグは自分で付けず、付け直しも削除もしません。古い DSH に対応した版のタグも、対応表に残します。CI は PR と `main` への push で `pnpm check` を実行し、コミットした `lib/` がビルド結果と一致するかも確かめます。
+#### Prompt notes
 
-新しい DSH への対応や機能の追加・変更はマイナー版（`0.1.0` → `0.2.0`）、不具合の修正はパッチ版（`0.1.0` → `0.1.1`）を上げます。
+You can save free-form guidance for each model, such as “English only,” “natural language,” or “tag list.” OpenRouter does not provide this information, so notes are not bundled. Ask the agent to research and add notes for a model when needed. It saves them with `media_set_prompt_notes` and reads them alongside `media_list_models` results. Notes persist in DSH storage across restarts. Saving or clearing them always requires confirmation because agents in all future conversations can read them.
+
+#### Generation cards
+
+Open **Generate…** to the left of the chat input. Choose image or video, then content, model, aspect ratio, resolution, length, and audio. Available options come from the selected model's catalog entry.
+
+If the conversation already has a chat-input model selection, selecting a different model on the card and choosing **Ask the agent** also changes that conversation's model. Agent tools prioritize the conversation's selection, so both card buttons use the card's model.
+
+#### Direct commands
+
+| Command | Behavior |
+|---|---|
+| `/image [--model id] [--aspect 1:1] [--resolution 1K] [--count n] [--seed n] [--image path]... [--yes] <prompt>` | Generates images and saves them in `generated-media/`. Repeat `--image` for multiple input images |
+| `/video [--model id] [--duration seconds] [--aspect 16:9] [--resolution 720p] [--audio on\|off] [--seed n] [--first path] [--last path] [--ref path]... [--yes] <prompt>` | Submits a video job. `--first` and `--last` supply the first and last frames; repeat `--ref` for reference images |
+| `/media-jobs [job-id]` | Lists video jobs for this session. With an ID, checks its status immediately |
+
+Place options before the prompt. Quote paths containing spaces with `"`. With `requireApproval` enabled and no conversation-wide permission, add `--yes` to generate; otherwise the command returns an estimate only.
+
+A job started with `/video` does not trigger an agent turn when it finishes. Its notification reaches the agent on the next turn; use `/media-jobs` for an immediate check.
+
+### Tools
+
+| Tool | Behavior |
+|---|---|
+| `media_list_models` | Lists image models of configured providers (video models with `kind: "video"`) and accepted parameters |
+| `media_generate_image` | Generates images, saves them in `generated-media/` under the working directory, and displays attachments |
+| `media_generate_video` | Submits a video job and immediately returns its ID; saves the completed video in `generated-media/` and notifies the session |
+| `media_video_status` | Lists video jobs; with `job_id`, checks the provider immediately |
+| `media_get_prompt_notes` | Reads saved prompt notes |
+| `media_set_prompt_notes` | Saves a model's prompt notes; empty notes clear them |
+
+### Session model selection
+
+Use `/media-model` to choose the image or video model for a session. When a tool call omits the model, it uses the session selection, then the configured default. A session selection also overrides a different model explicitly requested by the agent.
+
+| Command | Behavior |
+|---|---|
+| `/media-model` | Shows current selections and defaults |
+| `/media-model image` | Lists available image model IDs; use `video` for video models |
+| `/media-model image <model-id> [provider]` | Selects this session's image model; unlisted IDs are rejected |
+| `/media-model image default` | Clears the session selection and restores the configured default |
+
+Use `video` in place of `image` for video selections. Selections are stored by session ID in DSH storage and survive restarts. The **Image** and **Video** selectors beside the chat input use the same operation.
+
+### Browser integration
+
+DSH loads `lib/client.js` to add these interfaces:
+
+- **Video previews:** plays mp4, m4v, webm, and mov in DSH's file preview, up to the 32 MiB size DSH can load in full.
+- **Settings:** selects default image/video models from provider catalogs and changes image-count and duration limits, approval, and notifications.
+- **Chat selectors and generation cards:** as described above.
+- **Inline media:** replaces the generic DSH tool cards only for `media_generate_image`, `media_generate_video`, `/image`, and `/video` result rows. Images open in the file preview. Images generated by the agent also appear as thumbnails below its reply with the same action buttons. **Use for image** opens a generation card using the image as input; **Use for video** uses it as the first frame. Only models supporting input images appear on these cards. **Use in chat** puts the image path into the chat input, replacing its draft. Video rows check job status until completion and allow playback once the video has been saved.
+
+Catalogs, session selections, and estimates are read through authenticated Host routes `api/media-gen.models`, `api/media-gen.session`, and `api/media-gen.estimate`. Media is read through `api/media-gen.file` (with `Range` support); job status uses `api/media-gen.job`. API keys are never sent to the browser.
+
+The file route serves recorded plugin outputs and, for images saved before file tracking existed, images directly under folders matching the configured `outputDir` (default: `generated-media`). This fallback does not distinguish working directories. A resolved link must also be directly under a folder matching that output directory, and its content must be PNG, JPEG, WebP, or GIF. **Do not use a common folder name such as `Pictures` for `outputDir`.**
+
+### Video jobs
+
+- Jobs are recorded in DSH's storage domain, and unfinished jobs resume watching after a restart. Without storage, jobs remain only in memory and cannot be tracked after restarting.
+- Status is checked every `videoPollIntervalMs`. Completed videos are downloaded immediately because OpenRouter does not publish its retention period.
+- Completion, failure, and expiry are reported to the originating session. If the session is closed, notification is delivered when it next opens.
+- Jobs still unfinished after `videoMaxWatchMs` stop being watched and show “stopped.” OpenRouter has no cancellation API: this does not cancel the provider job. Pass `job_id` to `media_video_status` to resume checking.
+- If duration is omitted and the model offers durations above `maxVideoSeconds`, the plugin sends the longest available duration within the limit. If the model does not list supported durations, the plugin cannot apply this limit to its default duration.
+
+### Approval, input images, and costs
+
+DSH's approval dialog offers only denial or one-time permission. To allow generation for a whole conversation, use **Ask before generating** in the chat input's **Media** menu or `/media-approval on`. In an allowed conversation, agent generation and `/image` or `/video` without `--yes` can run without per-generation confirmation. `/media-approval off` restores per-generation confirmation. Only the user can change this permission; agents cannot.
+
+`requireApproval` controls the normal per-generation confirmation. The following agent-tool exceptions still require confirmation even when it is disabled or the conversation is allowed:
+
+- Sending input images outside the working directory. Their paths appear in the approval dialog.
+- A second or subsequent generation call in the same agent turn, to prevent the agent from deciding to regenerate on its own.
+
+Direct commands use `requireApproval`, `--yes`, and conversation permission for their confirmation decision; the two agent-tool exceptions above do not apply to direct commands.
+
+For input images, agents pass paths in `media_generate_image.input_images` or `media_generate_video.first_frame`, `last_frame`, and `reference_images`. Files are read before submission and sent as Base64 data URLs. Only PNG, JPEG, WebP, or GIF files up to 20 MiB are accepted. Models whose catalog does not support the requested input image or frame are rejected before submission. Per-input-image charges, when listed by the model, are added to the estimate.
+
+`media_generate_image` takes `prompts`, one prompt per image, and generates one image per prompt. “Three different poses” should be one call containing three prompts, with one confirmation. When requesting multiple images, a prompt that describes several different images is rejected before billing, to avoid putting all of them in a single image. `/image --count` repeats the same prompt instead.
+
+Generation results tell the agent that images are already visible and ask it not to open and reread them or ask again whether to generate. Follow-up work such as “make an image, then animate it” can continue in the same request; the second generation requires confirmation. If a later image fails, already saved images are returned with the failure. After a timeout or unusable response, the agent is instructed not to retry on its own because the provider may already have charged for the request.
+
+Approval dialogs estimate cost from the catalog's `pricing_skus`. Per-second prices are multiplied by duration; uncertain resolution or duration produces a range. Unrecognized pricing is shown as unknown. When a required agent approval cannot be priced because catalog retrieval or another estimate step failed, the dialog states that failure and still asks. Estimates are based on output pricing and may understate the actual bill when a model also charges for input images or tokens.
+
+Approval runs at the outermost `tools/pre-execute` handler. A DSH `tools.guard` blocks agent generation allowed by another mechanism that bypassed this handler.
+
+## Configuration
+
+| Setting | Default | Description |
+|---|---|---|
+| `defaultImageProvider` | unset | Default DSH provider ID for images |
+| `defaultImageModel` | unset | Default image model ID |
+| `maxImagesPerCall` | 4 | Maximum images per call |
+| `defaultVideoProvider` | unset | Default DSH provider ID for videos |
+| `defaultVideoModel` | unset | Default video model ID |
+| `maxVideoSeconds` | 10 | Maximum video duration per call, subject to model catalog limits described above |
+| `requireApproval` | true | Asks before generation unless the conversation is allowed; agent repeat-generation and outside-image checks still apply |
+| `outputDir` | `generated-media` | Output path relative to the working directory; must stay inside it |
+| `catalogTtlMs` | 600000 | Model catalog cache lifetime |
+| `requestTimeoutMs` | 180000 | Provider request timeout |
+| `maxImageBytes` | 31457280 | Maximum accepted generated-image size |
+| `videoPollIntervalMs` | 30000 | Video job polling interval |
+| `videoMaxWatchMs` | 10800000 | Maximum watching time (3 hours) |
+| `maxVideoBytes` | 524288000 | Maximum accepted generated-video size |
+| `notifyOnVideoCompletion` | true | Notifies the session when a video job ends |
+| `chatImageModels` | unset | Image model IDs shown in the chat menu; empty means all catalog models |
+| `chatVideoModels` | unset | Video model IDs shown in the chat menu; empty means all catalog models |
+
+Open DSH's Plugins page, select **Media Generation**, and open **Media Generation >** from its Components row. Models shown in chat are chosen through a searchable checklist. Even with a selection, **All models…** in the chat menu can select another model. The agent's `media_list_models` always returns all models, regardless of this filter.
+
+## Limitations
+
+- Browser UI appearance has not been verified in a running DSH instance; unit tests use mock network requests.
+- Cost estimates are approximate and may omit some input-image or token charges.
+- Browser video preview is limited to 32 MiB, independently of the larger `maxVideoBytes` download limit.
+- Avoid common `outputDir` names: the legacy-image route does not distinguish working directories. See Browser integration above.
+- Stopping video tracking does not cancel or refund the provider job. Without DSH storage, tracking does not survive a restart.
+- Mandatory outside-image and same-turn regeneration confirmations apply to agent tools. Direct-command confirmation follows `requireApproval`, `--yes`, and conversation permission.
+
+## Development
+
+After cloning the repository:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm check
+```
+
+`pnpm check` runs type checks, the build, unit tests, and validation of the current version's CHANGELOG section. To try the local checkout:
+
+```sh
+dsh plugin --profile web add <absolute-path-to-clone>
+```
+
+After editing `src/`, rebuild with `pnpm build` and commit the generated `lib/` files with the source changes.
+
+DSH peer dependencies require `>=0.2.0-rc.2 <0.3.0`. Development and type checks use the published `0.2.0-rc.2` packages.
+
+### Releases
+
+Versions are managed through `package.json.version` and tags named `v<version>`.
+
+1. In a PR, bump `version`, add a `## v<version>` section to [CHANGELOG.md](CHANGELOG.md) with supported DSH versions and changes, and update the compatibility tables in both README.md and README.ja.md. `pnpm check` fails without the matching CHANGELOG section.
+2. After the PR is merged into `main`, CI automatically creates the version tag and GitHub release.
+
+Do not create, move, or delete tags manually. Keep earlier releases supporting older DSH versions in the compatibility tables. CI runs `pnpm check` for PRs and pushes to `main`, and checks that committed `lib/` files match the build output.
+
+Use a minor version for new DSH support or added/changed features (`0.1.0` → `0.2.0`) and a patch version for bug fixes (`0.1.0` → `0.1.1`).
+
+## License
+
+MIT, as declared in [package.json](package.json).
