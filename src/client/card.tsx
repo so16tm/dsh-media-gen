@@ -9,10 +9,10 @@
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import {
-  findModel, loadEstimate, loadModels, loadSessionChoices, offeredOf,
+  findModel, loadEstimate, loadModels, loadSessionChoices, offeredOf, takesInputs,
   type Estimate, type ModelListing, type SessionChoices,
 } from './api.ts'
-import { agentRequest, directCommand, EMPTY_VALUES, type CardValues } from './card-model.ts'
+import { agentRequest, directCommand, EMPTY_VALUES, inputImagesOf, switchKind, type CardValues } from './card-model.ts'
 import type { Translate } from './locales.ts'
 
 // Native controls take DSH's surface and label colors; Chromium draws a
@@ -40,9 +40,9 @@ function formatCost(t: Translate, estimate: Estimate | undefined): string {
 }
 
 /** The generation card dialog. */
-export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): ReactNode {
+export function ComposeCard(props: ComposeButtonProps & { onClose(): void; initial?: Partial<CardValues> | undefined }): ReactNode {
   const { t } = props
-  const [values, setValues] = useState<CardValues>(EMPTY_VALUES)
+  const [values, setValues] = useState<CardValues>(() => ({ ...EMPTY_VALUES, ...props.initial }))
   const [listing, setListing] = useState<ModelListing>()
   const [choices, setChoices] = useState<SessionChoices>()
   const [estimate, setEstimate] = useState<{ value?: Estimate; error?: string; loading: boolean }>({ loading: false })
@@ -75,19 +75,27 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): Re
     const timer = setTimeout(() => {
       loadEstimate({
         kind: values.kind, sessionId: props.sessionId, model: values.model, aspect: values.aspect, resolution: values.resolution,
-        ...values.kind === 'video' ? { duration: values.duration, audio: values.audio } : {},
+        ...values.kind === 'video'
+          ? { duration: values.duration, audio: values.audio, first: values.firstFrame }
+          : { image: values.images },
       }, controller.signal).then(
         (value) => { setEstimate({ value, loading: false }) },
         (e: unknown) => { if (!controller.signal.aborted) setEstimate({ error: e instanceof Error ? e.message : String(e), loading: false }) },
       )
     }, 300)
     return () => { clearTimeout(timer); controller.abort() }
-  }, [values.kind, values.model, values.aspect, values.resolution, values.duration, values.audio, props.sessionId])
+  }, [values.kind, values.model, values.aspect, values.resolution, values.duration, values.audio, values.images, values.firstFrame, props.sessionId])
 
+  const inputs = inputImagesOf(values)
+  // With input images, only models that can take them are offered; the chosen one stays so the estimate can say why it fails.
   const models = useMemo(
-    () => offeredOf(listing, choices?.chatModels?.[values.kind], [values.model, fallback]),
-    [listing, choices, values.kind, values.model, fallback],
+    () => offeredOf(listing, choices?.chatModels?.[values.kind], [values.model, fallback])
+      .filter(m => inputs.length === 0 || m.id === values.model || takesInputs(values.kind, m)),
+    [listing, choices, values.kind, values.model, fallback, inputs.length],
   )
+  const removeInput = (path: string) => {
+    set(values.kind === 'image' ? { images: values.images.filter(p => p !== path) } : { firstFrame: '' })
+  }
   const ready = values.content.trim().length > 0 && !busy
   const send = (action: () => Promise<void> | void) => {
     setBusy(true)
@@ -131,7 +139,7 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): Re
       <div role="radiogroup" style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         {(['image', 'video'] as const).map(kind => (
           <Button key={kind} variant={values.kind === kind ? 'primary' : 'outline'} size="sm" role="radio" aria-checked={values.kind === kind}
-            onClick={() => { set({ ...EMPTY_VALUES, kind, content: values.content }) }}>
+            onClick={() => { setValues(v => switchKind(v, kind)) }}>
             {t(kind)}
           </Button>
         ))}
@@ -141,6 +149,19 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): Re
         <textarea data-modal-autofocus rows={4} style={{ ...fieldStyle, resize: 'vertical', marginTop: 4 }} placeholder={t('contentHint')}
           value={values.content} onChange={(e) => { set({ content: e.target.value }) }} />
       </label>
+      {inputs.length === 0 ? null : (
+        <div style={{ ...rowStyle, alignItems: 'start' }}>
+          <span>{t(values.kind === 'image' ? 'inputImages' : 'firstFrame')}</span>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            {inputs.map(path => (
+              <li key={path} style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+                <span title={path} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{path}</span>
+                <Button variant="outline" size="sm" onClick={() => { removeInput(path) }}>{t('removeInput')}</Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <label style={rowStyle}>
         <span>{t('model')}</span>
         <select style={fieldStyle} value={values.model} onChange={(e) => { set({ model: e.target.value, aspect: '', resolution: '', duration: '', audio: '' }) }}>
@@ -148,6 +169,9 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): Re
           {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
       </label>
+      {inputs.length > 0 && models.length === 0 && listing !== undefined
+        ? <p role="note" style={{ margin: '4px 0', opacity: 0.8 }}>{t('noInputModels')}</p>
+        : null}
       {select(t('aspect'), values.aspect, v => { set({ aspect: v }) }, capabilities.aspectRatios)}
       {select(t('resolution'), values.resolution, v => { set({ resolution: v }) }, capabilities.resolutions)}
       {values.kind === 'video'

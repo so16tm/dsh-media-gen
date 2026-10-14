@@ -5,8 +5,10 @@
  * @module dsh-media-gen/src/client/media-view
  */
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { Translate } from './locales.ts'
+import { activeInput, onInputsChange } from './media-actions.ts'
 import { fileUrl, imagePathsOf, imagesOf, jobIdOf, promptOf, textOf, videoJobOf } from './media-model.ts'
 
 /** How often a running video job is checked while its row is on screen. */
@@ -86,6 +88,28 @@ function Thumb(props: { path: string; attachment: unknown; loadImage?: MediaTool
   return <img src={src} alt={props.alt} loading="lazy" style={mediaStyle} onError={fallback} />
 }
 
+/**
+ * Buttons that reuse one saved image: as a reference for a new image, as a
+ * video's first frame, or in the chat draft. They act on the chat input on
+ * screen and are disabled while none is mounted.
+ */
+function ImageActions(props: { path: string; t: Translate }): ReactNode {
+  const { t, path } = props
+  const input = useSyncExternalStore(onInputsChange, activeInput)
+  const disabled = input === undefined
+  const title = disabled ? t('useUnavailable') : undefined
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+      <Button variant="outline" size="sm" disabled={disabled} title={title}
+        onClick={() => { input?.compose({ kind: 'image', images: [path] }) }}>{t('useForImage')}</Button>
+      <Button variant="outline" size="sm" disabled={disabled} title={title}
+        onClick={() => { input?.compose({ kind: 'video', firstFrame: path }) }}>{t('useForVideo')}</Button>
+      <Button variant="outline" size="sm" disabled={disabled} title={title}
+        onClick={() => { input?.setDraft(t('useInChatDraft', { path })) }}>{t('useInChat')}</Button>
+    </div>
+  )
+}
+
 /** Thumbnails of saved images; a click opens the file in DSH's preview, or the image itself. */
 function Images(props: {
   paths: readonly string[]
@@ -98,10 +122,13 @@ function Images(props: {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '6px 0' }}>
       {props.paths.map((path, index) => (
-        <a key={path} href={fileUrl(path)} target="_blank" rel="noreferrer" title={path}
-          onClick={(e) => { if (props.open !== undefined) { e.preventDefault(); props.open(path) } }}>
-          <Thumb path={path} attachment={props.attachments[index]} loadImage={props.loadImage} alt={props.t('generatedImageAlt')} />
-        </a>
+        <figure key={path} style={{ margin: 0, maxWidth: 'min(100%, 360px)' }}>
+          <a href={fileUrl(path)} target="_blank" rel="noreferrer" title={path}
+            onClick={(e) => { if (props.open !== undefined) { e.preventDefault(); props.open(path) } }}>
+            <Thumb path={path} attachment={props.attachments[index]} loadImage={props.loadImage} alt={props.t('generatedImageAlt')} />
+          </a>
+          <ImageActions path={path} t={props.t} />
+        </figure>
       ))}
     </div>
   )

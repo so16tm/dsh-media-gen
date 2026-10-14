@@ -13,6 +13,10 @@ export interface ModelCapabilities {
   resolutions?: string[]
   durations?: number[]
   audio?: boolean
+  /** Whether an image model takes input images; undefined when unknown. */
+  imageInput?: boolean
+  /** Frames a video model takes as images; undefined when unknown. */
+  frameImages?: string[]
 }
 
 /** One model in a picker. */
@@ -75,10 +79,17 @@ export function loadSessionChoices(sessionId: string, signal?: AbortSignal): Pro
 }
 
 /** Estimate one generation; rejects with the Host's reason when the parameters are invalid. */
-export function loadEstimate(query: Record<string, string | undefined>, signal?: AbortSignal): Promise<Estimate> {
+export function loadEstimate(query: Record<string, string | readonly string[] | undefined>, signal?: AbortSignal): Promise<Estimate> {
   const params = new URLSearchParams()
-  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, value)
+  for (const [key, value] of Object.entries(query)) {
+    for (const v of typeof value === 'string' ? [value] : value ?? []) if (v !== '') params.append(key, v)
+  }
   return getJson<Estimate>(`api/media-gen.estimate?${params.toString()}`, signal)
+}
+
+/** Whether a model can take the given kind's input images; true when its listing does not say. */
+export function takesInputs(kind: MediaKind, model: ModelOption): boolean {
+  return kind === 'image' ? model.options?.imageInput !== false : model.options?.frameImages?.includes('first_frame') ?? true
 }
 
 /** Find one model across a listing's providers. */

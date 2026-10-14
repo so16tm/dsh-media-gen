@@ -347,16 +347,24 @@ export function apply(ctx: Context, config: Config): void {
     if (typeof args?.prompt !== 'string') return decision
     const prompt = args.prompt.length > PROMPT_PREVIEW ? `${args.prompt.slice(0, PROMPT_PREVIEW)}…` : args.prompt
     let text: (lang: Parameters<typeof t>[0]) => string
+    let inputs: string[] = []
     try {
       if (exec.name === TOOL_GENERATE_IMAGE) {
         const plan = await service.plan(await sessionArgs(sessionModels, 'image', args as ImageArgs, exec), exec.signal)
         const cost = await service.estimate(plan, exec.signal)
+        inputs = plan.inputs
         text = lang => t(lang, 'approval.image', {
           count: String(plan.count), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
         })
       } else {
         const plan = await service.planVideo(await sessionArgs(sessionModels, 'video', args as VideoArgs, exec), exec.signal)
         const cost = service.estimateVideo(plan)
+        const { first, last, references } = plan.inputs
+        inputs = [
+          ...first === undefined ? [] : [`${first} (first frame)`],
+          ...last === undefined ? [] : [`${last} (last frame)`],
+          ...references,
+        ]
         const duration = plan.params.duration
         text = lang => t(lang, typeof duration === 'number' ? 'approval.video' : 'approval.video.default', {
           model: plan.model.name, provider: plan.provider.id, cost: formatCostRange(lang, cost), seconds: String(duration),
@@ -366,7 +374,9 @@ export function apply(ctx: Context, config: Config): void {
       // An invalid request fails in execute with its classified error, before any charge.
       return decision
     }
-    const full = (lang: Parameters<typeof t>[0]) => `${text(lang)}\n${t(lang, 'approval.prompt', { prompt })}\n${t(lang, 'approval.session')}`
+    const inputLine = (lang: Parameters<typeof t>[0]) => inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`
+    const full = (lang: Parameters<typeof t>[0]) =>
+      `${text(lang)}${inputLine(lang)}\n${t(lang, 'approval.prompt', { prompt })}\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }
   })
 }

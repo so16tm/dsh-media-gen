@@ -25,7 +25,9 @@ export const SESSION_PATH = '/api/media-gen.session'
 /**
  * Cost estimate route for the browser's generation card. Query: `kind`,
  * optional `sessionId`, `model`, `provider`, `aspect`, `resolution`,
- * `count`, `duration`, `audio=on|off`. Nothing is billed.
+ * `count`, `duration`, `audio=on|off`, and input image paths (`image`,
+ * repeatable, for images; `first`, `last` for videos), which are checked
+ * against the model but not read. Nothing is billed.
  */
 export const ESTIMATE_PATH = '/api/media-gen.estimate'
 
@@ -42,6 +44,10 @@ export interface ModelOptions {
   durations?: number[]
   /** Whether audio can be switched; undefined when the listing does not say. */
   audio?: boolean
+  /** Whether an image model takes input images; undefined when the listing does not say. */
+  imageInput?: boolean
+  /** Frames a video model takes as images (`first_frame`, `last_frame`). */
+  frameImages?: string[]
 }
 
 function enumValues(spec: ParameterSpec | undefined): string[] | undefined {
@@ -52,7 +58,14 @@ function enumValues(spec: ParameterSpec | undefined): string[] | undefined {
 export function imageOptions(model: ImageModel): ModelOptions {
   const aspectRatios = enumValues(model.parameters.aspect_ratio)
   const resolutions = enumValues(model.parameters.resolution)
-  return { ...aspectRatios === undefined ? {} : { aspectRatios }, ...resolutions === undefined ? {} : { resolutions } }
+  const references = model.parameters.input_references
+  const imageInput = references?.kind === 'range' && references.max === 0 ? false
+    : model.inputModalities.length > 0 ? model.inputModalities.includes('image') : undefined
+  return {
+    ...aspectRatios === undefined ? {} : { aspectRatios },
+    ...resolutions === undefined ? {} : { resolutions },
+    ...imageInput === undefined ? {} : { imageInput },
+  }
 }
 
 /** Picker values of a video model. */
@@ -62,6 +75,7 @@ export function videoOptions(model: VideoModel): ModelOptions {
     ...model.resolutions === undefined || model.resolutions.length === 0 ? {} : { resolutions: [...model.resolutions] },
     ...model.durations === undefined || model.durations.length === 0 ? {} : { durations: [...model.durations] },
     ...model.audio === undefined ? {} : { audio: model.audio },
+    ...model.frameImages === undefined ? {} : { frameImages: [...model.frameImages] },
   }
 }
 
@@ -168,7 +182,9 @@ export async function handleEstimate(service: MediaService, store: SessionModelS
     const base = { prompt: 'estimate', model: text('model'), provider: text('provider'), aspect_ratio: text('aspect'), resolution: text('resolution') }
     const choice = sessionId === undefined ? undefined : store.get(sessionId)?.[kind]
     if (kind === 'image') {
-      const plan = await service.plan(withSessionModel({ ...base, count: optionalInteger(params, 'count') }, choice), request.signal)
+      const plan = await service.plan(withSessionModel({
+        ...base, count: optionalInteger(params, 'count'), input_images: params.getAll('image'),
+      }, choice), request.signal)
       const cost = await service.estimate(plan, request.signal)
       return Response.json({
         model: { id: plan.model.id, name: plan.model.name }, provider: plan.provider.id,
@@ -178,6 +194,7 @@ export async function handleEstimate(service: MediaService, store: SessionModelS
     const audio = text('audio')
     const plan = await service.planVideo(withSessionModel({
       ...base, duration: optionalInteger(params, 'duration'), ...audio === undefined ? {} : { generate_audio: audio === 'on' },
+      first_frame: text('first'), last_frame: text('last'),
     }, choice), request.signal)
     return Response.json({
       model: { id: plan.model.id, name: plan.model.name }, provider: plan.provider.id, cost: service.estimateVideo(plan) ?? null,

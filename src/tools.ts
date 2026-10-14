@@ -135,6 +135,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
               ...m.aspectRatios === undefined ? {} : { aspectRatios: [...m.aspectRatios] },
               ...m.audio === undefined ? {} : { audio: m.audio },
               ...m.seed === undefined ? {} : { seed: m.seed },
+              ...m.frameImages === undefined ? {} : { frameImages: [...m.frameImages] },
               pricingUsd: { ...m.pricingSkus },
               ...noted(m.id),
             })),
@@ -158,6 +159,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
             id: m.id,
             name: m.name,
             ...m.description === undefined ? {} : { description: m.description.slice(0, 300) },
+            ...m.inputModalities.length === 0 ? {} : { inputImages: m.inputModalities.includes('image') },
             parameters: Object.fromEntries(Object.entries(m.parameters).map(([k, v]) => [k, describeSpec(v)])),
             ...noted(m.id),
           })),
@@ -185,6 +187,11 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
       resolution: { type: 'string', description: 'Resolution tier such as 1K or 2K, if the model accepts it.' },
       seed: { type: 'integer', description: 'Seed for reproducible output, if the model accepts it.' },
+      input_images: {
+        type: 'array', items: { type: 'string' },
+        description: 'Reference images to edit or build on: file paths, relative to the working directory or absolute, '
+          + 'such as the path of an image generated earlier or attached by the user. Only for models whose listing shows inputImages true.',
+      },
     },
     output: {
       schema: { type: 'json' },
@@ -219,6 +226,16 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 16:9, if the model lists it.' },
       generate_audio: { type: 'boolean', description: 'Generate an audio track, if the model can.' },
       seed: { type: 'integer', description: 'Seed for reproducible output, if the model supports it.' },
+      first_frame: {
+        type: 'string',
+        description: 'Image path used as the first frame (image to video), such as an image generated earlier. '
+          + 'Only for models whose listing has "first_frame" in frameImages.',
+      },
+      last_frame: { type: 'string', description: 'Image path used as the last frame, if the model lists "last_frame" in frameImages.' },
+      reference_images: {
+        type: 'array', items: { type: 'string' },
+        description: 'Reference image paths for style or subject, if the model takes them. Some models bill per input image.',
+      },
     },
     output: {
       schema: { type: 'json' },

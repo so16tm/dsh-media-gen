@@ -12,7 +12,7 @@ import { MediaError } from './errors.ts'
 import { runImagePlan, sessionIdOf, startVideoPlan, type Caller, type GenerateConfig } from './generate.ts'
 import { describeJob } from './jobs.ts'
 import { formatCost, formatCostRange } from './messages.ts'
-import type { ImageArgs, MediaService } from './service.ts'
+import { videoInputCount, type ImageArgs, type MediaService } from './service.ts'
 import { withSessionModel, type MediaKind, type SessionModelStore } from './session-models.ts'
 import type { VideoArgs } from './video.ts'
 
@@ -21,8 +21,9 @@ export const IMAGE_COMMAND = 'image'
 export const VIDEO_COMMAND = 'video'
 
 /** Command input hints. */
-export const IMAGE_HINT = '[--model id] [--aspect 1:1] [--resolution 1K] [--count n] [--seed n] [--yes] <prompt>'
-export const VIDEO_HINT = '[--model id] [--duration s] [--aspect 16:9] [--resolution 720p] [--audio on|off] [--seed n] [--yes] <prompt>'
+export const IMAGE_HINT = '[--model id] [--aspect 1:1] [--resolution 1K] [--count n] [--seed n] [--image path]... [--yes] <prompt>'
+export const VIDEO_HINT = '[--model id] [--duration s] [--aspect 16:9] [--resolution 720p] [--audio on|off] [--seed n] '
+  + '[--first path] [--last path] [--ref path]... [--yes] <prompt>'
 
 /** One parsed command line. */
 export interface DirectRequest<A> {
@@ -31,21 +32,32 @@ export interface DirectRequest<A> {
   confirmed: boolean
 }
 
-const IMAGE_OPTIONS = new Set(['model', 'provider', 'aspect', 'resolution', 'count', 'seed'])
-const VIDEO_OPTIONS = new Set(['model', 'provider', 'aspect', 'resolution', 'duration', 'audio', 'seed'])
+const IMAGE_OPTIONS = new Set(['model', 'provider', 'aspect', 'resolution', 'count', 'seed', 'image'])
+const VIDEO_OPTIONS = new Set(['model', 'provider', 'aspect', 'resolution', 'duration', 'audio', 'seed', 'first', 'last', 'ref'])
+
+/** Options that may be given more than once. */
+const REPEATABLE = new Set(['image', 'ref'])
 
 function integer(name: string, value: string): number {
   if (!/^\d+$/u.test(value)) throw new MediaError('INVALID_REQUEST', `--${name} takes a whole number; got ${value}`)
   return Number(value)
 }
 
+/** Parsed options; repeatable ones keep every value. */
+class Options {
+  constructor(private readonly values: Map<string, string[]>) {}
+  get(name: string): string | undefined { return this.values.get(name)?.[0] }
+  all(name: string): string[] | undefined { return this.values.get(name) }
+}
+
 /**
- * Split leading `--name value` options and `--yes` from the prompt.
+ * Split leading `--name value` options and `--yes` from the prompt. A value
+ * with spaces, such as a path, is written in double quotes.
  * @param allowed - option names this command accepts.
  * @param rawInput - text after the command name.
  */
-function split(allowed: ReadonlySet<string>, rawInput: string): { options: Map<string, string>; confirmed: boolean; prompt: string } {
-  const options = new Map<string, string>()
+function split(allowed: ReadonlySet<string>, rawInput: string): { options: Options; confirmed: boolean; prompt: string } {
+  const values = new Map<string, string[]>()
   let confirmed = false
   let rest = rawInput.trimStart()
   for (;;) {
@@ -58,14 +70,16 @@ function split(allowed: ReadonlySet<string>, rawInput: string): { options: Map<s
       continue
     }
     if (!allowed.has(name)) throw new MediaError('INVALID_REQUEST', `unknown option --${name}`)
-    const value = /^(\S+)(?:\s+|$)/u.exec(rest)
+    const value = /^(?:"([^"]*)"|(\S+))(?:\s+|$)/u.exec(rest)
     if (value === null) throw new MediaError('INVALID_REQUEST', `--${name} needs a value`)
-    options.set(name, value[1]!)
+    const previous = values.get(name)
+    if (previous !== undefined && !REPEATABLE.has(name)) throw new MediaError('INVALID_REQUEST', `--${name} is given twice`)
+    values.set(name, [...previous ?? [], value[1] ?? value[2]!])
     rest = rest.slice(value[0].length)
   }
   const prompt = rest.trim()
   if (prompt.length === 0) throw new MediaError('INVALID_REQUEST', 'write the prompt after the options')
-  return { options, confirmed, prompt }
+  return { options: new Options(values), confirmed, prompt }
 }
 
 /** Parse an `/image` line. */
@@ -83,6 +97,7 @@ export function parseImageCommand(rawInput: string): DirectRequest<ImageArgs> {
       resolution: options.get('resolution'),
       count: count === undefined ? undefined : integer('count', count),
       seed: seed === undefined ? undefined : integer('seed', seed),
+      input_images: options.all('image'),
     },
   }
 }
@@ -105,6 +120,9 @@ export function parseVideoCommand(rawInput: string): DirectRequest<VideoArgs> {
       duration: duration === undefined ? undefined : integer('duration', duration),
       generate_audio: audio === undefined ? undefined : audio === 'on',
       seed: seed === undefined ? undefined : integer('seed', seed),
+      first_frame: options.get('first'),
+      last_frame: options.get('last'),
+      reference_images: options.all('ref'),
     },
   }
 }
@@ -135,6 +153,10 @@ async function withChoice<A extends { model?: string | undefined; provider?: str
   return sessionId === undefined ? args : withSessionModel(args, (await deps.sessionModels).get(sessionId)?.[kind])
 }
 
+function inputNote(count: number): string {
+  return count === 0 ? '' : ` from ${count} input image(s)`
+}
+
 function errorText(error: unknown): string {
   return error instanceof MediaError ? `${error.code}: ${error.message}` : String(error)
 }
@@ -148,7 +170,7 @@ export async function runImageCommand(deps: DirectDeps, rawInput: string, caller
       const cost = await deps.service.estimate(plan, caller.signal)
       return {
         kind: 'success',
-        text: `${plan.count} image(s) with ${plan.model.name} (${plan.provider.id}), estimated cost ${formatCost('en', cost)}. `
+        text: `${plan.count} image(s) with ${plan.model.name} (${plan.provider.id})${inputNote(plan.inputs.length)}, estimated cost ${formatCost('en', cost)}. `
           + `Nothing was generated; send the same line with --yes to generate.`,
       }
     }
@@ -170,7 +192,7 @@ export async function runVideoCommand(deps: DirectDeps, rawInput: string, caller
       const seconds = typeof plan.params.duration === 'number' ? `${plan.params.duration} s` : 'default length'
       return {
         kind: 'success',
-        text: `Video (${seconds}) with ${plan.model.name} (${plan.provider.id}), estimated cost ${formatCostRange('en', deps.service.estimateVideo(plan))}. `
+        text: `Video (${seconds}) with ${plan.model.name} (${plan.provider.id})${inputNote(videoInputCount(plan.inputs))}, estimated cost ${formatCostRange('en', deps.service.estimateVideo(plan))}. `
           + `Nothing was submitted; send the same line with --yes to start the job.`,
       }
     }

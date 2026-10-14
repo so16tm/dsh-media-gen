@@ -9,7 +9,8 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { VideoJobRecord, VideoJobWatcher } from './jobs.ts'
 import type { MediaFileIndex } from './media-files.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
-import type { ImagePlan, MediaService, VideoPlan } from './service.ts'
+import { loadInputImage, loadInputImages } from './input-images.ts'
+import type { ImagePlan, LoadedVideoInputs, MediaService, VideoPlan } from './service.ts'
 
 /** Prompt excerpt stored with a video job. */
 const PROMPT_EXCERPT = 200
@@ -71,8 +72,11 @@ export interface ImageToolValue {
 export async function runImagePlan(
   ctx: Context, service: MediaService, config: GenerateConfig, plan: ImagePlan, prompt: string, caller: Caller,
 ): Promise<ImageToolValue> {
-  const dir = resolveOutputDir(await workingDirectory(ctx, caller), config.outputDir)
-  const result = await service.generate(plan, prompt, caller.signal)
+  const cwd = await workingDirectory(ctx, caller)
+  const dir = resolveOutputDir(cwd, config.outputDir)
+  // Inputs are read before the request, so a missing file fails before anything is billed.
+  const inputs = await loadInputImages(plan.inputs, cwd)
+  const result = await service.generate(plan, prompt, caller.signal, inputs)
   const attachments: AttachmentStore | undefined = ctx.get('attachments')
   const { saved, attachmentFailures } = await saveImages(result.images.map(i => i.data), {
     dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
@@ -106,9 +110,15 @@ export async function startVideoPlan(
   ctx: Context, service: MediaService, config: GenerateConfig, plan: VideoPlan, prompt: string, caller: Caller,
   origin: 'agent' | 'command',
 ): Promise<VideoJobRecord> {
-  const dir = resolveOutputDir(await workingDirectory(ctx, caller), config.outputDir)
+  const cwd = await workingDirectory(ctx, caller)
+  const dir = resolveOutputDir(cwd, config.outputDir)
   const watcher = await config.videoJobs
-  const state = await service.submitVideo(plan, prompt, caller.signal)
+  const inputs: LoadedVideoInputs = {
+    ...plan.inputs.first === undefined ? {} : { first: await loadInputImage(plan.inputs.first, cwd) },
+    ...plan.inputs.last === undefined ? {} : { last: await loadInputImage(plan.inputs.last, cwd) },
+    references: await loadInputImages(plan.inputs.references, cwd),
+  }
+  const state = await service.submitVideo(plan, prompt, caller.signal, inputs)
   const now = new Date()
   const estimate = service.estimateVideo(plan)
   const sessionId = sessionIdOf(caller)

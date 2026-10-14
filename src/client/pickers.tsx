@@ -6,9 +6,11 @@
  */
 
 import { IconChevronDownOutlineRegular, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { findModel, loadModels, loadSessionChoices, offeredOf, optionsOf, type MediaKind, type ModelListing, type SessionChoices } from './api.ts'
 import { ComposeCard, type ComposeButtonProps } from './card.tsx'
+import type { CardValues } from './card-model.ts'
+import { registerInput } from './media-actions.ts'
 import type { Translate } from './locales.ts'
 
 // Native controls take DSH's surface and label colors; Chromium draws a
@@ -206,7 +208,8 @@ export function InputControl(props: InputControlProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<Pane>('root')
   const [showAll, setShowAll] = useState(false)
-  const [card, setCard] = useState(false)
+  // The card is open when set; the values are what it starts with.
+  const [card, setCard] = useState<Partial<CardValues>>()
   const [choices, setChoices] = useState<SessionChoices>()
   const [error, setError] = useState<string>()
   const image = useListing('image')
@@ -219,6 +222,16 @@ export function InputControl(props: InputControlProps): ReactNode {
     reload(controller.signal)
     return () => { controller.abort() }
   }, [reload])
+
+  // A generated image's buttons open the card or fill the draft of this input.
+  const { sessionId } = props
+  const actions = useRef(props.inputActions)
+  actions.current = props.inputActions
+  useEffect(() => registerInput({
+    sessionId,
+    compose: (initial) => { setCard(initial) },
+    setDraft: (text) => { actions.current.setDraft(text) },
+  }), [sessionId])
 
   const listingOf = (kind: MediaKind) => (kind === 'image' ? image : video).listing
   const chosenOf = (kind: MediaKind) => choices?.[kind]?.model ?? ''
@@ -277,7 +290,7 @@ export function InputControl(props: InputControlProps): ReactNode {
   const select = (id: string): void => {
     if (id === 'compose') {
       close()
-      setCard(true)
+      setCard({})
     } else if (id === 'pane:image' || id === 'pane:video') {
       setPane(id === 'pane:image' ? 'image' : 'video')
     } else if (id === 'back') {
@@ -316,7 +329,7 @@ export function InputControl(props: InputControlProps): ReactNode {
           </button>
         )}
       />
-      {card ? <ComposeCard {...props} onClose={() => { setCard(false); reload() }} /> : null}
+      {card === undefined ? null : <ComposeCard {...props} initial={card} onClose={() => { setCard(undefined); reload() }} />}
     </>
   )
 }
