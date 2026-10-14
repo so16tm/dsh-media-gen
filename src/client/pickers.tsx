@@ -284,7 +284,7 @@ export function InputControl(props: InputControlProps): ReactNode {
         anchor={(
           <button type="button" style={triggerStyle} aria-haspopup="menu" aria-expanded={open}
             title={error === undefined ? t('pickerTitle') : t('switchFailed', { message: error })}
-            onClick={() => { if (open) close(); else setOpen(true) }}>
+            onClick={() => { if (open) close(); else { reload(); setOpen(true) } }}>
             <span>{t('trigger')}</span>
             <IconChevronDownOutlineRegular width={12} height={12} />
           </button>
