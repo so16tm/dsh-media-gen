@@ -40,6 +40,8 @@ export interface SessionChoices {
   image: { model: string; provider?: string } | null
   video: { model: string; provider?: string } | null
   defaults: { image: string | null; video: string | null }
+  /** Models the chat input offers; an empty list offers every listed model. Absent from older Hosts. */
+  chatModels?: { image: string[]; video: string[] }
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -85,6 +87,20 @@ export function findModel(listing: ModelListing | undefined, id: string | undefi
     if (found !== undefined) return found
   }
   return undefined
+}
+
+/**
+ * The options the chat input offers: the configured subset when there is
+ * one, plus the ids in `keep` (the current choice and the default) so a
+ * selection never disappears from its own list.
+ */
+export function offeredOf(listing: ModelListing | undefined, subset: readonly string[] | undefined, keep: readonly (string | null | undefined)[]): ModelOption[] {
+  const all = optionsOf(listing, undefined)
+  if (subset === undefined || subset.length === 0) return optionsOf(listing, keep[0])
+  const wanted = new Set([...subset, ...keep.filter((id): id is string => typeof id === 'string' && id.length > 0)])
+  const out = all.filter(m => wanted.has(m.id))
+  for (const id of wanted) if (!out.some(m => m.id === id)) out.push({ id, name: id })
+  return out
 }
 
 /** Flatten a listing into picker options, keeping a current id that the listing lacks. */

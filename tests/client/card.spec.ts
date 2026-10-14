@@ -18,3 +18,13 @@ describe('generation card', () => {
     expect(directCommand({ ...EMPTY_VALUES, content: 'a fox', resolution: '1K' })).toBe('/image --yes --resolution 1K a fox')
   })
 })
+
+describe('offered models', () => {
+  const listing = { providers: [{ id: 'or', name: 'OR', stale: false, models: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }] }], default: null }
+  it('limits to the configured subset but keeps the current and default ids', async () => {
+    const { offeredOf } = await import('../../src/client/api.ts')
+    expect(offeredOf(listing, [], ['b']).map(m => m.id)).toEqual(['a', 'b', 'c'])
+    expect(offeredOf(listing, ['c'], ['b', null]).map(m => m.id)).toEqual(['b', 'c'])
+    expect(offeredOf(listing, ['c'], ['gone']).map(m => m.id)).toEqual(['c', 'gone'])
+  })
+})

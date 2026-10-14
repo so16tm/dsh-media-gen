@@ -9,7 +9,7 @@
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import {
-  findModel, loadEstimate, loadModels, loadSessionChoices, optionsOf,
+  findModel, loadEstimate, loadModels, loadSessionChoices, offeredOf,
   type Estimate, type ModelListing, type SessionChoices,
 } from './api.ts'
 import { agentRequest, directCommand, EMPTY_VALUES, type CardValues } from './card-model.ts'
@@ -84,7 +84,10 @@ export function ComposeCard(props: ComposeButtonProps & { onClose(): void }): Re
     return () => { clearTimeout(timer); controller.abort() }
   }, [values.kind, values.model, values.aspect, values.resolution, values.duration, values.audio, props.sessionId])
 
-  const models = useMemo(() => optionsOf(listing, values.model), [listing, values.model])
+  const models = useMemo(
+    () => offeredOf(listing, choices?.chatModels?.[values.kind], [values.model, fallback]),
+    [listing, choices, values.kind, values.model, fallback],
+  )
   const ready = values.content.trim().length > 0 && !busy
   const send = (action: () => Promise<void> | void) => {
     setBusy(true)

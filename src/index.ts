@@ -76,6 +76,10 @@ export interface Config {
   maxVideoBytes: Volatile<number>
   /** Tell the session when a video job ends. */
   notifyOnVideoCompletion: Volatile<boolean>
+  /** Image model ids the chat input offers; empty offers every listed model. */
+  chatImageModels: Volatile<string[]>
+  /** Video model ids the chat input offers; empty offers every listed model. */
+  chatVideoModels: Volatile<string[]>
 }
 
 /** Validated configuration with defaults. */
@@ -95,6 +99,8 @@ export const Config = z.object({
   videoMaxWatchMs: z.natural().min(60_000).default(3 * 60 * 60_000).volatile(),
   maxVideoBytes: z.natural().min(1).default(500 * 1024 * 1024).volatile(),
   notifyOnVideoCompletion: z.boolean().default(true).volatile(),
+  chatImageModels: z.array(z.string()).default([]).volatile(),
+  chatVideoModels: z.array(z.string()).default([]).volatile(),
 })
 
 /** Live agent surface used to report finished video jobs. */
@@ -277,7 +283,9 @@ export function apply(ctx: Context, config: Config): void {
 
   // Model lists and session choices for the browser half's pickers.
   ;(ctx as unknown as { inject(deps: string[], fn: (c: { connection: { fetch: FetchRegistry } }) => void): void })
-    .inject(['connection'], (c) => { registerRoutes(c.connection.fetch, service, sessionModels) })
+    .inject(['connection'], (c) => { registerRoutes(c.connection.fetch, service, sessionModels, () => ({
+      image: config.chatImageModels.get(), video: config.chatVideoModels.get(),
+    })) })
 
   registerTools(ctx, service, {
     ...generateConfig,

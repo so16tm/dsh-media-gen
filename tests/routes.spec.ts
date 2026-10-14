@@ -62,7 +62,9 @@ describe('session route', () => {
     await store.set('s1', 'image', { model: 'g/img' })
     const { svc } = service()
     expect(await handleSession(store, svc, url(`${SESSION_PATH}?sessionId=s1`)).json())
-      .toEqual({ image: { model: 'g/img' }, video: null, defaults: { image: null, video: 'v/vid' } })
+      .toEqual({ image: { model: 'g/img' }, video: null, defaults: { image: null, video: 'v/vid' }, chatModels: { image: [], video: [] } })
+    expect((await handleSession(store, svc, url(`${SESSION_PATH}?sessionId=s1`), { image: ['g/img'], video: [] }).json()).chatModels)
+      .toEqual({ image: ['g/img'], video: [] })
     expect(handleSession(store, svc, url(SESSION_PATH)).status).toBe(400)
   })
 
