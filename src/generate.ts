@@ -63,10 +63,14 @@ export interface ImageToolValue {
   costUsd: number | null
   staleCatalog: boolean
   attachmentFailures: number
+  /** Why a later variation failed after earlier images were saved. */
+  failed?: string
 }
 
 /**
- * Generate and save the images of one plan. The provider is called once.
+ * Generate and save the images of one plan: the prompt, then each
+ * variation, one provider call each. A failure after an image was saved
+ * stops the rest and is reported with what was saved.
  * @param prompt - the text sent to the model, unchanged.
  */
 export async function runImagePlan(
@@ -76,11 +80,27 @@ export async function runImagePlan(
   const dir = resolveOutputDir(cwd, config.outputDir)
   // Inputs are read before the request, so a missing file fails before anything is billed.
   const inputs = await loadInputImages(plan.inputs, cwd)
-  const result = await service.generate(plan, prompt, caller.signal, inputs)
   const attachments: AttachmentStore | undefined = ctx.get('attachments')
-  const { saved, attachmentFailures } = await saveImages(result.images.map(i => i.data), {
-    dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
-  })
+  const saved: Awaited<ReturnType<typeof saveImages>>['saved'] = []
+  let attachmentFailures = 0
+  let costUsd: number | null = 0
+  let failed: string | undefined
+  for (const [index, text] of [prompt, ...plan.variations].entries()) {
+    let result: Awaited<ReturnType<MediaService['generate']>>
+    try {
+      result = await service.generate(plan, text, caller.signal, inputs)
+    } catch (error) {
+      if (index === 0) throw error
+      failed = `image ${index + 1} of ${1 + plan.variations.length} failed: ${error instanceof Error ? error.message : String(error)}`
+      break
+    }
+    const batch = await saveImages(result.images.map(i => i.data), {
+      dir, model: plan.model.id, attachments, maxBytes: config.maxImageBytes,
+    })
+    saved.push(...batch.saved)
+    attachmentFailures += batch.attachmentFailures
+    costUsd = costUsd === null || result.costUsd === null ? null : costUsd + result.costUsd
+  }
   if (config.mediaFiles !== undefined) {
     const index = await config.mediaFiles
     // The images are saved either way; a failed entry only hides them from the chat view.
@@ -95,9 +115,10 @@ export async function runImagePlan(
       bytes: s.bytes,
       ...s.attachment === undefined ? {} : { attachment: s.attachment as unknown as Record<string, unknown> },
     })),
-    costUsd: result.costUsd,
+    costUsd,
     staleCatalog: plan.staleCatalog,
     attachmentFailures,
+    ...failed === undefined ? {} : { failed },
   }
 }
 

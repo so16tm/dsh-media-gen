@@ -38,9 +38,10 @@ const MODEL_GUIDE = 'Omit model to use the model the user selected; the selectio
 
 /** When details are missing; shared by both generation tools. */
 /** Generation is billed, so a finished call is never followed by another on the agent's own judgment. */
-const ONCE_GUIDE = 'Make only the generations the user asked for. When they ask for several images that differ (for example '
-  + 'three poses), make one call per image, each prompt describing that one image only; a prompt that lists several variants '
-  + 'produces a collage in every image. Use count only for copies of the same prompt. Never make more than asked. Once '
+const ONCE_GUIDE = 'Make only the generations the user asked for, in one call. When they ask for several images that differ '
+  + '(for example three poses), write prompt for the first image only and put each other image\'s complete prompt in '
+  + 'variations; never list the variants in one prompt, which yields a collage. Use count only for copies of one prompt. '
+  + 'Once you have what you need, call the tool in the same turn instead of announcing it and stopping. Never make more than asked. Once '
   + 'those return, do not call again on your own to retry, improve, fix, or vary the results, even if they miss the request: '
   + 'show them, say what differs, and let the user decide.'
 
@@ -192,7 +193,12 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       prompt: { type: 'string', required: true, description: 'The prompt sent to the image model, written for that model as described above.' },
       model: { type: 'string', description: 'Image model id; omit to use the model the user selected. A model chosen for this session in the chat input overrides it.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
-      count: { type: 'integer', description: 'Number of images from this same prompt (default 1). For images that differ, make one call each.' },
+      count: { type: 'integer', description: 'Copies of this same prompt (default 1). For images that differ, use variations instead.' },
+      variations: {
+        type: 'array', items: { type: 'string' },
+        description: 'Complete prompts for further images that differ from the first (another pose, angle, or scene), one '
+          + 'per image; prompt describes the first image only. The call makes 1 + variations images, one request each.',
+      },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
       resolution: { type: 'string', description: 'Resolution tier such as 1K or 2K, if the model accepts it.' },
       seed: { type: 'integer', description: 'Seed for reproducible output, if the model accepts it.' },
@@ -344,6 +350,7 @@ export function renderImageResult(value: ImageToolValue): ContentBlock[] {
     'Do not generate beyond what the user asked for. If this was the last image they asked for, stop here even if it '
       + 'misses the request; say what differs and let the user decide.',
   ]
+  if (value.failed !== undefined) lines.push(`Stopped early: ${value.failed}. Tell the user; do not retry on your own.`)
   if (value.attachmentFailures > 0) lines.push(`${value.attachmentFailures} image(s) could not be attached inline; the files are saved.`)
   const blocks: ContentBlock[] = [{ type: 'text', text: lines.join('\n') }]
   for (const image of value.images) {

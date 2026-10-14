@@ -42,7 +42,15 @@ export interface ImageArgs {
   seed?: number | undefined
   /** Reference images: paths in the working directory. */
   input_images?: string[] | undefined
+  /** Prompts of further images that differ from the first, one complete prompt each. */
+  variations?: string[] | undefined
 }
+
+/**
+ * A prompt that asks for several different images at once, which `count`
+ * turns into copies of one collage. English and Japanese wording.
+ */
+const VARIANT_LIST = /\b(?:different|various|varied|several|multiple|three|four|five)\s+(?:poses?|angles?|styles?|outfits?|expressions?|scenes?|views?|actions?|positions?)\b|(?:^|\s)[1-9][).]\s|違う|異なる|別々|それぞれ|いろいろな|様々な/iu
 
 /** A fully resolved generation plan, computed before anything is billed. */
 export interface ImagePlan {
@@ -52,6 +60,8 @@ export interface ImagePlan {
   params: Record<string, string | number | boolean>
   /** Reference image paths, read when the plan runs. */
   inputs: string[]
+  /** Prompts of further images, generated after the first prompt's. */
+  variations: string[]
   /** True when the model listing could not be refreshed. */
   staleCatalog: boolean
 }
@@ -136,6 +146,18 @@ export class MediaService {
       // models that do not declare it still work.
       n: count > 1 ? count : undefined,
     })
+    const variations = (args.variations ?? []).map(v => v.trim()).filter(v => v.length > 0)
+    if (variations.length > 0 && count > 1) {
+      throw new MediaError('INVALID_REQUEST', 'use either count (copies of one prompt) or variations (one prompt per differing image), not both')
+    }
+    if (count * (1 + variations.length) > settings.maxImagesPerCall) {
+      throw new MediaError('LIMIT_EXCEEDED', `${1 + variations.length} images exceed the configured limit of ${settings.maxImagesPerCall} images per call`)
+    }
+    if (count > 1 && VARIANT_LIST.test(args.prompt)) {
+      throw new MediaError('INVALID_REQUEST', 'count makes copies of this one prompt, and a prompt that lists several different '
+        + 'images yields a collage in each copy; for images that differ, set prompt to the first image only and put each '
+        + 'other image\'s complete prompt in variations, with count 1')
+    }
     const inputs = inputPaths(args.input_images, 'input_images')
     if (inputs.length > 0) {
       if (model.inputModalities.length > 0 && !model.inputModalities.includes('image')) {
@@ -148,7 +170,7 @@ export class MediaService {
           : `model "${model.id}" takes at most ${limit.max} input images; got ${inputs.length}`)
       }
     }
-    return { provider, model, count, params, inputs, staleCatalog: snapshot.stale }
+    return { provider, model, count, params, inputs, variations, staleCatalog: snapshot.stale }
   }
 
   /** Estimate the plan's cost in USD; undefined when it cannot be estimated. */
@@ -156,7 +178,7 @@ export class MediaService {
     const lines = await this.catalog.imagePricing(plan.provider.id, plan.model.id,
       async (id, s) => (await this.adapter(plan.provider)).getImagePricing(id, s), signal)
     const resolution = typeof plan.params.resolution === 'string' ? plan.params.resolution : undefined
-    return estimateImageCost(lines, plan.count, resolution)
+    return estimateImageCost(lines, plan.count * (1 + plan.variations.length), resolution)
   }
 
   /** Run one planned generation. Sent once; never retried. */

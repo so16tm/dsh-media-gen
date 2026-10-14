@@ -354,16 +354,19 @@ export function apply(ctx: Context, config: Config): void {
     if (!repeat && (!config.requireApproval.get() || await autoApproved(sessionIdOf(exec)))) return decision
     const args = exec.arguments as { prompt?: unknown }
     if (typeof args?.prompt !== 'string') return decision
-    const prompt = args.prompt.length > PROMPT_PREVIEW ? `${args.prompt.slice(0, PROMPT_PREVIEW)}…` : args.prompt
+    const preview = (text: string) => (text.length > PROMPT_PREVIEW ? `${text.slice(0, PROMPT_PREVIEW)}…` : text)
+    const prompt = preview(args.prompt)
     let text: (lang: Parameters<typeof t>[0]) => string
     let inputs: string[] = []
+    let variations: string[] = []
     try {
       if (exec.name === TOOL_GENERATE_IMAGE) {
         const plan = await service.plan(await sessionArgs(sessionModels, 'image', args as ImageArgs, exec), exec.signal)
         const cost = await service.estimate(plan, exec.signal)
         inputs = plan.inputs
+        variations = plan.variations
         text = lang => t(lang, 'approval.image', {
-          count: String(plan.count), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
+          count: String(plan.count * (1 + plan.variations.length)), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
         })
       } else {
         const plan = await service.planVideo(await sessionArgs(sessionModels, 'video', args as VideoArgs, exec), exec.signal)
@@ -385,7 +388,9 @@ export function apply(ctx: Context, config: Config): void {
     }
     const inputLine = (lang: Parameters<typeof t>[0]) => inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`
     const full = (lang: Parameters<typeof t>[0]) =>
-      `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${t(lang, 'approval.prompt', { prompt })}\n${t(lang, 'approval.session')}`
+      `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${t(lang, 'approval.prompt', { prompt })}`
+      + variations.map((v, i) => `\n${t(lang, 'approval.variation', { n: String(i + 2), prompt: preview(v) })}`).join('')
+      + `\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }
   })
 }

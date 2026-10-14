@@ -8,6 +8,7 @@ import { OpenRouterAdapter } from '../src/openrouter.ts'
 import { resolveOutputDir, saveImages, sniffImage } from '../src/output.ts'
 import { ProviderBridge } from '../src/provider-bridge.ts'
 import { MediaService, type ServiceSettings } from '../src/service.ts'
+import { runImagePlan } from '../src/generate.ts'
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
 
@@ -74,6 +75,32 @@ describe('MediaService', () => {
     const result = await svc.generate(plan, 'x')
     expect(result.costUsd).toBe(0.05)
     expect(requests.filter(u => u.endsWith('/images'))).toHaveLength(1)
+  })
+})
+
+describe('image variations', () => {
+  it('plans one image per variation, estimates them all, and refuses a listed-variant prompt with count', async () => {
+    const { svc } = service({ defaultImageModel: 'g/img', maxImagesPerCall: 3 })
+    const plan = await svc.plan({ prompt: 'a cat sitting', variations: ['a cat stretching', ' ', 'a cat jumping'] })
+    expect(plan.variations).toEqual(['a cat stretching', 'a cat jumping'])
+    expect(await svc.estimate(plan)).toBeCloseTo(0.18)
+    await expect(svc.plan({ prompt: 'x', count: 2, variations: ['y'] })).rejects.toThrow('not both')
+    await expect(svc.plan({ prompt: 'x', variations: ['a', 'b', 'c'] })).rejects.toMatchObject({ code: 'LIMIT_EXCEEDED' })
+    await expect(svc.plan({ prompt: 'white cat, three different poses: standing, sitting', count: 3 })).rejects.toThrow('variations')
+    await expect(svc.plan({ prompt: '白い猫、それぞれ違うポーズ', count: 3 })).rejects.toThrow('variations')
+    expect((await svc.plan({ prompt: 'a white cat', count: 3 })).count).toBe(3)
+  })
+
+  it('sends one request per prompt and saves every image', async () => {
+    const { svc, requests } = service({ defaultImageModel: 'g/img' })
+    const dir = await mkdtemp(join(tmpdir(), 'media-var-'))
+    const plan = await svc.plan({ prompt: 'a cat sitting', variations: ['a cat jumping'] })
+    const ctx = { get: () => undefined } as never
+    const caller = { signal: new AbortController().signal, agent: { session: { header: { cwd: dir } } } } as never
+    const value = await runImagePlan(ctx, svc, { outputDir: 'out', maxImageBytes: 1_000_000, videoJobs: new Promise(() => {}) } as never, plan, 'a cat sitting', caller)
+    expect(value.images).toHaveLength(2)
+    expect(value.costUsd).toBeCloseTo(0.1)
+    expect(requests.filter(u => u.endsWith('/images'))).toHaveLength(2)
   })
 })
 
