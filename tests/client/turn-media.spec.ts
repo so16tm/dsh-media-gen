@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { turnImages, turnMediaDefinition, TURN_MEDIA_KEY } from '../../src/client/turn-media.ts'
+import { turnCost, turnImages, turnMediaDefinition, TURN_MEDIA_KEY } from '../../src/client/turn-media.ts'
 
 type Event = Parameters<typeof turnMediaDefinition.match>[0]
 
@@ -23,14 +23,15 @@ describe('turn media', () => {
       { type: 'turn/start', seq: 1, data: { turn: 1 } },
       { type: 'tool/call', seq: 2, data: { turn: 1, callId: 'c1', name: 'media_generate_image' } },
       { type: 'tool/call', seq: 3, data: { turn: 1, callId: 'c2', name: 'read' } },
-      result(4, 'c1', { model: 'm', images: [{ path: '/w/a.png', mediaType: 'image/png' }] }),
+      result(4, 'c1', { model: 'm', costUsd: 0.007, images: [{ path: '/w/a.png', mediaType: 'image/png' }] }),
       result(5, 'c2', { images: [{ path: '/w/not-ours.png' }] }),
       { type: 'tool/call', seq: 6, data: { turn: 1, callId: 'c3', name: 'media_generate_image' } },
       result(7, 'c3', { images: [{ path: '/w/b.png' }] }, true),
     ])
-    expect(data).toEqual({ kind: 'turn', turn: 1, key: TURN_MEDIA_KEY, value: { images: [{ seq: 4, path: '/w/a.png' }] } })
+    expect(data).toEqual({ kind: 'turn', turn: 1, key: TURN_MEDIA_KEY, value: { images: [{ seq: 4, path: '/w/a.png' }], costUsd: 0.007 } })
     const owner = { seq: 9, openFile: () => {}, turn: { data: { get: (key: string) => key === TURN_MEDIA_KEY ? data?.value : undefined } } }
     expect(turnImages(owner)).toEqual(['/w/a.png'])
+    expect(turnCost(owner)).toBe(0.007)
     expect(turnImages({ ...owner, turn: { ...owner.turn, end: { seq: 3 } } })).toEqual([])
   })
 
@@ -42,7 +43,7 @@ describe('turn media', () => {
         { type: 'text', text: 'Generated 1 image(s) with m (provider p).\n- /w/old.png (image/png, 10 bytes)\nCost: 0.01 USD.' },
       ] } } },
     ])
-    expect(data?.value).toEqual({ images: [{ seq: 3, path: '/w/old.png' }] })
+    expect(data?.value).toEqual({ images: [{ seq: 3, path: '/w/old.png' }], costUsd: null })
   })
 
   it('publishes nothing for a turn without images', () => {

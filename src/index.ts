@@ -391,7 +391,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const inputLine = (lang: Parameters<typeof t>[0]) => inputs.length === 0 ? '' : `\n${t(lang, 'approval.inputs', { inputs: inputs.join(', ') })}`
     const full = (lang: Parameters<typeof t>[0]) =>
-      `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${t(lang, 'approval.prompt', { prompt })}`
+      `${repeat ? `${t(lang, 'approval.repeat')}\n` : ''}${text(lang)}${inputLine(lang)}\n${variations.length === 0 ? t(lang, 'approval.prompt', { prompt }) : t(lang, 'approval.variation', { n: '1', prompt })}`
       + variations.map((v, i) => `\n${t(lang, 'approval.variation', { n: String(i + 2), prompt: preview(v) })}`).join('')
       + `\n${t(lang, 'approval.session')}`
     return { kind: 'ask', reason: full('en'), displayReason: localized(full) }

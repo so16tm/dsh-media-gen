@@ -24,6 +24,8 @@ export interface TurnImage {
 /** Turn data published under {@link TURN_MEDIA_KEY}. */
 export interface TurnMediaData {
   readonly images: readonly TurnImage[]
+  /** Summed cost of this turn's image results; null when any result did not report one. */
+  readonly costUsd?: number | null
 }
 
 interface State {
@@ -31,6 +33,7 @@ interface State {
   /** Ids of this turn's image tool calls. */
   readonly calls: ReadonlySet<string>
   readonly images: readonly TurnImage[]
+  readonly costUsd: number | null
 }
 
 /** The parts of a Session event this Definition reads. */
@@ -63,7 +66,7 @@ export const turnMediaDefinition = {
   },
   start: (_context: unknown, match: Match): State => {
     if (match.event.type !== 'turn/start') throw new Error(`${TURN_MEDIA_KEY} start requires turn/start`)
-    return { turn: match.event.data.turn, calls: new Set(), images: [] }
+    return { turn: match.event.data.turn, calls: new Set(), images: [], costUsd: 0 }
   },
   update: (context: { state: State }, match: Match): State => {
     const { event } = match
@@ -72,15 +75,22 @@ export const turnMediaDefinition = {
     if (event.type !== 'tool/result' || event.data.message?.isError === true) return state
     if (!state.calls.has(String(event.data.message?.source?.callId))) return state
     const paths = imagesOf(event.data.meta, textOf(event.data.message?.content))
-    return paths.length === 0 ? state : { ...state, images: [...state.images, ...paths.map(path => ({ seq: event.seq, path }))] }
+    if (paths.length === 0) return state
+    const cost = (event.data.meta as { costUsd?: unknown } | null | undefined)?.costUsd
+    return {
+      ...state,
+      images: [...state.images, ...paths.map(path => ({ seq: event.seq, path }))],
+      costUsd: state.costUsd === null || typeof cost !== 'number' ? null : state.costUsd + cost,
+    }
   },
   buildLocationData: (context: { state?: State | undefined }, scope: string, previous: { kind: string; turn?: number; key?: string; value?: TurnMediaData } | null) => {
     const state = context.state
     if (scope !== 'turn' || state === undefined || state.images.length === 0) return null
-    if (previous?.kind === 'turn' && previous.turn === state.turn && previous.key === TURN_MEDIA_KEY && previous.value?.images === state.images) {
+    if (previous?.kind === 'turn' && previous.turn === state.turn && previous.key === TURN_MEDIA_KEY && previous.value?.images === state.images
+      && previous.value.costUsd === state.costUsd) {
       return previous
     }
-    return { kind: 'turn', turn: state.turn, key: TURN_MEDIA_KEY, value: { images: state.images } }
+    return { kind: 'turn', turn: state.turn, key: TURN_MEDIA_KEY, value: { images: state.images, costUsd: state.costUsd } }
   },
 }
 
@@ -96,4 +106,10 @@ export function turnImages(owner: TurnTailOwner): string[] {
   const data = owner.turn.data.get(TURN_MEDIA_KEY) as TurnMediaData | undefined
   const bound = owner.turn.end?.seq ?? owner.seq
   return [...new Set((data?.images ?? []).filter(i => i.seq <= bound).map(i => i.path))]
+}
+
+/** The turn's summed image cost, when every result reported one. */
+export function turnCost(owner: TurnTailOwner): number | undefined {
+  const cost = (owner.turn.data.get(TURN_MEDIA_KEY) as TurnMediaData | undefined)?.costUsd
+  return typeof cost === 'number' ? cost : undefined
 }

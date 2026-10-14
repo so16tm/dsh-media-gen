@@ -9,7 +9,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import type { Translate } from './locales.ts'
 import { activeInput, onInputsChange } from './media-actions.ts'
-import { turnImages, type TurnTailOwner } from './turn-media.ts'
+import { turnCost, turnImages, type TurnTailOwner } from './turn-media.ts'
 import { fileUrl, imagePathsOf, imagesOf, jobIdOf, promptOf, textOf, videoJobOf } from './media-model.ts'
 
 /** How often a running video job is checked while its row is on screen. */
@@ -191,6 +191,11 @@ function attachmentsOf(content: readonly unknown[] | undefined): unknown[] {
     .map(block => block.attachment)
 }
 
+/** A summed float such as 0.021000000000000002, without the float noise. */
+function costText(cost: number): string {
+  return String(Number(cost.toPrecision(6)))
+}
+
 export function MediaToolView(props: MediaToolViewProps): ReactNode {
   const { t, block } = props
   const video = props.toolName === 'media_generate_video'
@@ -199,7 +204,7 @@ export function MediaToolView(props: MediaToolViewProps): ReactNode {
   const text = textOf(block.content)
   const meta = block.meta as { model?: unknown; costUsd?: unknown } | null | undefined
   const model = meta?.model
-  const cost = typeof meta?.costUsd === 'number' ? t('mediaCost', { cost: String(meta.costUsd) }) : undefined
+  const cost = typeof meta?.costUsd === 'number' ? t('mediaCost', { cost: costText(meta.costUsd) }) : undefined
   const title = t(video ? 'videoTitle' : 'imageTitle')
   if (!settled) {
     return <div><Head title={title} detail={t('generating')} /><Prompt text={prompt} t={t} /></div>
@@ -233,8 +238,10 @@ export function MediaTurnTail(props: TurnTailOwner & { t: Translate }): ReactNod
   const { t } = props
   const paths = turnImages(props)
   if (paths.length === 0) return null
+  const cost = turnCost(props)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '6px 0' }}>
+      {cost === undefined ? null : <div style={{ ...quietStyle, fontSize: 12 }}>{t('mediaCost', { cost: costText(cost) })}</div>}
       {paths.map(path => (
         <div key={path} style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
           <a href={fileUrl(path)} target="_blank" rel="noreferrer" title={path}
