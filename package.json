@@ -33,7 +33,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm build && pnpm test && node scripts/release-notes.mjs >/dev/null"
   },
   "dsh": {
     "bundle": {
@@ -73,5 +74,9 @@
     "esbuild": "0.28.2",
     "typescript": "~5.9.2",
     "vitest": "^3.2.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/so16tm/dsh-media-gen.git"
   }
 }

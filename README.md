@@ -39,22 +39,26 @@ DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。D
 
 オプションはプロンプトより前に書きます。空白を含むパスは `"` で囲みます。`requireApproval` が有効なら、`--yes` を付けたときだけ生成します。`/video` で始めたジョブが終わっても、エージェントのターンは起こしません。知らせは次のターンでエージェントに届くので、すぐに知りたいときは `/media-jobs` で確認します。
 
+## 対応バージョン
+
+プラグインの版ごとの対応 DSH は次のとおりです（各版の変更点は [CHANGELOG.md](./CHANGELOG.md)）。
+
+| プラグイン | 対応 DSH |
+|---|---|
+| `v0.1.0` | `0.2.0-rc.2` 以降の `0.2.x`（確認済み：`0.2.0-rc.2`） |
+
 ## インストール
 
-GitHub から直接入れます。ビルド済みの `lib/` をリポジトリに入れてあるので、手元での clone やビルドは要りません。
+使っている DSH に対応する版のタグを指定して、リポジトリから直接入れます。ビルド済みの `lib/` をリポジトリに含めているので、手元での clone やビルド、pnpm のビルド許可（`allowBuilds`）は要りません。
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git
+dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git#v0.1.0
 ```
 
-- 既定ブランチ（`main`）の最新を入れます。ビルドスクリプト（`prepare`）を持たないので、pnpm のビルド許可（`allowBuilds`）も要りません。
 - リポジトリは非公開なので、PC の git が GitHub にサインインできている必要があります（Windows なら Git Credential Manager）。
-- 新しい版に入れ替えるときは、同じ `add` をもう一度実行します。DSH はプロファイルの `package.json` に `#` 以下のブランチ指定を残さないため、`#ブランチ名` を付けて入れても、次の更新では `main` を取りに行きます。開発中のブランチを試したときは、試し終えたら `#` なしで `add` し直してください。
+- 更新するときは、削除せずに新しい版のタグで同じ `add` を実行し、DSH を再起動します。入っている版が新しい版に置き換わります。
+- タグを付けずに指定すると、まだ版として公開していない `main` の最新が入ります。DSH はプロファイルの `package.json` に `#` 以下を残さないため、タグなしの `update` も `main` を取りに行きます。版を固定したいときは、タグを付けた `add` で入れ替えてください。
 - 使うのをやめるときは `dsh plugin --profile <profile> remove dsh-media-gen` です。
-
-開発するときは clone して `pnpm install && pnpm build` し、`dsh plugin --profile <profile> add <clone の絶対パス>` で入れます。`src/` を変えたら、`pnpm build` で `lib/` を作り直して一緒にコミットします。
-
-対象 DSH：`0.2.0-rc.2` 以上 `0.3.0` 未満（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。開発と型チェックは `0.2.0-rc.2` の公開パッケージで行っています。
 
 ## 前提
 
@@ -143,6 +147,18 @@ DSH の Models 設定で OpenRouter のプロバイダーを追加し、API キ�
 ## 開発
 
 ```sh
-pnpm typecheck
-pnpm test
+pnpm check   # 型チェック + ビルド + テスト + CHANGELOG の節の確認
 ```
+
+clone して `pnpm install && pnpm build` し、`dsh plugin --profile <profile> add <clone の絶対パス>` で入れて試せます。`src/` を変えたら、`pnpm build` で `lib/` を作り直して一緒にコミットします。
+
+対象 DSH：`0.2.0-rc.2` 以上 `0.3.0` 未満（`@deepseek-ai/dsh-*` の peerDependencies で照合されます）。開発と型チェックは `0.2.0-rc.2` の公開パッケージで行っています。
+
+### 版の公開
+
+版は `package.json` の `version` とタグ `v<版>` で管理します。
+
+1. PR で `version` を上げ、[CHANGELOG.md](./CHANGELOG.md) に `## v<版>` の節（対応 DSH と変更点）を追加し、上の対応表を更新します。節がないと `pnpm check` が失敗します。
+2. PR を `main` にマージしたら、そのマージコミットにタグ `v<版>` を付けます。タグは付け直しも削除もしません。古い DSH に対応した版のタグも、対応表に残します。
+
+新しい DSH への対応や機能の追加・変更はマイナー版（`0.1.0` → `0.2.0`）、不具合の修正はパッチ版（`0.1.0` → `0.1.1`）を上げます。
