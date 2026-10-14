@@ -105,9 +105,16 @@
 - [x] ツール結果での画像・動画の表現 → 画像は attachment。動画は自前で保存して `present` で提示する（§5）。
 - [x] ジョブ永続化・再起動時の回復 → storage-domain と schedule 方式（§6）。
 - [x] 画像・動画 API の最新仕様 → §7。
-- [ ] 対象 DSH バージョンと互換性方針 → 未決定。初期は `0.2.x` を peer の範囲にする想定。
+- [x] 対象 DSH バージョンと互換性方針 → `0.2.0-rc.2` 以上 `0.3.0` 未満（2026-10-14 決定）。調査は `0.2.1-alpha.2` で行ったため、`0.2.0-rc.2` との差分は §10 に記録する。
 
 ## 9. 段階1に進む前に決めること
 
 1. ~~日本語言語パックの扱い~~ → 追加しない（§4 の決定）。
 2. **実機確認**：§2 の「settings からプロファイルを読む」経路と、OpenRouter への実通信は、DSH を動かせる環境と OpenRouter の API キーで確認する必要がある。この作業環境からは openrouter.ai へ直接通信できなかった。
+
+## 10. 0.2.0-rc.2 との差分（2026-10-14）
+
+実機確認に使う DSH が `0.2.0-rc.2` だったため、対象をこのバージョンに合わせた。本プラグインが使う API のうち、差分があったのは次の 1 点だけだった。
+
+- `workingDirectory` サービス（`@deepseek-ai/dsh-working-directory`）は `0.2.0-rc.2` に存在しない。`present` ツールは `exec.agent.session.header.cwd` から作業ディレクトリを得ている（`packages/deliverables/tool-present/src/index.ts`）。本プラグインは、サービスがあればそれを使い、なければセッションヘッダーの `cwd`、それもなければ Host プロセスの作業ディレクトリを使う。
+- `llm.listConfigurableProviders()`、`settings.describe()`、`credentials.resolve()`、`attachments.saveImage()`、`tools/pre-execute` の `displayReason`、`llm-pi-ai` のプロファイル形式は `0.2.0-rc.2` でも同じだった。
