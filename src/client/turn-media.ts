@@ -1,10 +1,13 @@
 /**
  * Images one turn generated, for the reuse buttons under the turn's reply.
  * A turn-scoped Definition records the paths each successful
- * `media_generate_image` result reports in its presentation metadata; the
+ * `media_generate_image` result reports in its presentation metadata, or, for
+ * results saved before the plugin attached metadata, lists in its text; the
  * turn-tail entry reads them back when the turn closes.
  * @module dsh-media-gen/src/client/turn-media
  */
+
+import { imagesOf, textOf } from './media-model.ts'
 
 /** Turn data key. */
 export const TURN_MEDIA_KEY = 'mediaGen.images'
@@ -40,18 +43,11 @@ interface EventLike {
     callId?: unknown
     name?: unknown
     meta?: unknown
-    message?: { isError?: boolean; source?: { callId?: unknown } }
+    message?: { isError?: boolean; source?: { callId?: unknown }; content?: readonly unknown[] }
   }
 }
 
 interface Match { event: EventLike }
-
-/** Image paths in a result's presentation metadata. */
-export function metaImagePaths(meta: unknown): string[] {
-  const images = (meta as { images?: unknown } | null | undefined)?.images
-  if (!Array.isArray(images)) return []
-  return images.map(i => (i as { path?: unknown } | null)?.path).filter((p): p is string => typeof p === 'string' && p.length > 0)
-}
 
 /** Turn-local accumulator of generated images; it publishes no view node. */
 export const turnMediaDefinition = {
@@ -75,7 +71,7 @@ export const turnMediaDefinition = {
     if (event.type === 'tool/call') return { ...state, calls: new Set([...state.calls, String(event.data.callId)]) }
     if (event.type !== 'tool/result' || event.data.message?.isError === true) return state
     if (!state.calls.has(String(event.data.message?.source?.callId))) return state
-    const paths = metaImagePaths(event.data.meta)
+    const paths = imagesOf(event.data.meta, textOf(event.data.message?.content))
     return paths.length === 0 ? state : { ...state, images: [...state.images, ...paths.map(path => ({ seq: event.seq, path }))] }
   },
   buildLocationData: (context: { state?: State | undefined }, scope: string, previous: { kind: string; turn?: number; key?: string; value?: TurnMediaData } | null) => {

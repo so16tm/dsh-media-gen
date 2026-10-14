@@ -34,6 +34,17 @@ describe('turn media', () => {
     expect(turnImages({ ...owner, turn: { ...owner.turn, end: { seq: 3 } } })).toEqual([])
   })
 
+  it('reads the result text of calls saved before the metadata existed', () => {
+    const data = run([
+      { type: 'turn/start', seq: 1, data: { turn: 1 } },
+      { type: 'tool/call', seq: 2, data: { turn: 1, callId: 'c1', name: 'media_generate_image' } },
+      { type: 'tool/result', seq: 3, surfaceOp: 'append', data: { turn: 1, message: { source: { callId: 'c1' }, content: [
+        { type: 'text', text: 'Generated 1 image(s) with m (provider p).\n- /w/old.png (image/png, 10 bytes)\nCost: 0.01 USD.' },
+      ] } } },
+    ])
+    expect(data?.value).toEqual({ images: [{ seq: 3, path: '/w/old.png' }] })
+  })
+
   it('publishes nothing for a turn without images', () => {
     expect(run([{ type: 'turn/start', seq: 1, data: { turn: 1 } }])).toBeNull()
   })
