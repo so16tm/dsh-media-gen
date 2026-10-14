@@ -28,9 +28,11 @@ function fakeContext(agents: FakeAgent[] = []) {
   const listeners = new Map<string, (...args: never[]) => unknown>()
   const tools: { name: string; execute(args: unknown, exec: unknown): Promise<unknown> }[] = []
   const disposers: (() => unknown)[] = []
+  const commands: { name: string; handler?(invocation: unknown): Promise<{ kind: string; text: string }> }[] = []
   const services: Record<string, unknown> = {
     credentials: { resolve: async () => ({ value: 'sk-or-k' }) },
     agents: { get: (id: string) => agents.find(a => a.session.id === id) },
+    commands: { register: (command: { name: string }) => { commands.push(command) } },
   }
   const ctx = {
     llm: {
@@ -41,9 +43,12 @@ function fakeContext(agents: FakeAgent[] = []) {
     on: (name: string, fn: (...args: never[]) => unknown) => { listeners.set(name, fn) },
     get: (name: string) => services[name],
     effect: (fn: () => () => unknown) => { disposers.push(fn()) },
+    inject: (deps: string[], fn: (c: Record<string, unknown>) => void) => {
+      if (deps.every(d => services[d] !== undefined)) fn(Object.fromEntries(deps.map(d => [d, services[d]])))
+    },
     logger: { warn: () => {} },
   }
-  return { ctx, listeners, tools, dispose: async () => { for (const d of disposers) await d() } }
+  return { ctx, listeners, tools, commands, dispose: async () => { for (const d of disposers) await d() } }
 }
 
 function stubNetwork() {
@@ -66,6 +71,21 @@ describe('plugin apply', () => {
     const { ctx, tools, dispose } = fakeContext()
     apply(ctx as never, Config({}) as never)
     expect(tools.map(t => t.name)).toEqual(['media_list_models', 'media_generate_image', 'media_generate_video', 'media_video_status'])
+    await dispose()
+  })
+
+  it('uses the model chosen with /media-model for the calling session only', async () => {
+    stubNetwork()
+    const cwd = await mkdtemp(join(tmpdir(), 'media-'))
+    const { ctx, tools, commands, dispose } = fakeContext([fakeAgent('s1')])
+    apply(ctx as never, Config({}) as never)
+    const command = commands.find(c => c.name === 'media-model')!
+    const signal = new AbortController().signal
+    expect(await command.handler!({ agent: fakeAgent('s1'), rawInput: ' video v/vid', signal })).toMatchObject({ kind: 'success' })
+    const generate = tools.find(t => t.name === 'media_generate_video')!
+    const submitted = await generate.execute({ prompt: 'a wave', duration: 4 }, { signal, agent: { session: { id: 's1', header: { cwd } } } }) as { model: string }
+    expect(submitted.model).toBe('v/vid')
+    await expect(generate.execute({ prompt: 'a wave', duration: 4 }, { signal, agent: { session: { id: 's2', header: { cwd } } } })).rejects.toMatchObject({ code: 'NO_MODEL' })
     await dispose()
   })
 

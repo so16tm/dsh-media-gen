@@ -12,12 +12,16 @@ import type {} from '@deepseek-ai/dsh-credentials'
 import { boundContextSummary, createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
 import {
-  describeJob, MemoryJobStore, openDomainStore, VideoJobWatcher, type JobStore, type StorageDomainService, type VideoJobRecord,
+  describeJob, MemoryJobStore, openDomainStore, VideoJobWatcher, type JobStore, type VideoJobRecord,
 } from './jobs.ts'
+import {
+  MEDIA_MODEL_COMMAND, MemorySessionModelStore, openSessionModelStore, runMediaModelCommand, type SessionModelStore,
+} from './session-models.ts'
+import type { StorageDomainService } from './storage.ts'
 import { formatCost, formatCostRange, localized, t } from './messages.ts'
 import { ProviderBridge, type CredentialResolver } from './provider-bridge.ts'
 import { MediaService, type ImageArgs } from './service.ts'
-import { registerTools, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
+import { registerTools, sessionArgs, TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO } from './tools.ts'
 import type { VideoArgs } from './video.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -99,6 +103,16 @@ interface AgentLike {
 /** Session-keyed registry of live agents. */
 interface AgentRegistry {
   get(sessionId: string): AgentLike | undefined
+}
+
+/** The part of DSH's command registry this plugin uses. */
+interface CommandRegistry {
+  register(definition: {
+    name: string
+    description: string
+    input?: { hint: string }
+    handler(invocation: { agent: AgentLike; rawInput: string; signal: AbortSignal }): Promise<{ kind: 'success' | 'error'; text: string }>
+  }): unknown
 }
 
 /** Message source of this plugin's in-session notices. */
@@ -185,11 +199,32 @@ export function apply(ctx: Context, config: Config): void {
       })
     })
 
+  const sessionModels: Promise<SessionModelStore> = storageDomain === undefined
+    ? Promise.resolve(new MemorySessionModelStore())
+    : openSessionModelStore(storageDomain).catch((error: unknown) => {
+      ctx.logger.warn(`dsh-media-gen: session model choices will not survive a restart; their storage failed to open: ${String(error)}`)
+      return new MemorySessionModelStore()
+    })
+  ctx.effect(() => async () => { await (await sessionModels).close?.() })
+
+  // `/media-model` sets the image or video model for the calling session.
+  ;(ctx as unknown as { inject(deps: string[], fn: (c: { commands: CommandRegistry }) => void): void })
+    .inject(['commands'], (c) => {
+      c.commands.register({
+        name: MEDIA_MODEL_COMMAND,
+        description: 'Choose the image or video generation model for this session',
+        input: { hint: 'image|video <model-id> [provider]' },
+        handler: async ({ agent, rawInput, signal }) =>
+          runMediaModelCommand(await sessionModels, service, agent.session.id, rawInput, signal),
+      })
+    })
+
   registerTools(ctx, service, {
     outputDir: config.outputDir,
     maxImageBytes: config.maxImageBytes,
     videoJobs,
     maxWatchMs: () => config.videoMaxWatchMs.get(),
+    sessionModels,
   })
 
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
@@ -202,13 +237,13 @@ export function apply(ctx: Context, config: Config): void {
     let text: (lang: Parameters<typeof t>[0]) => string
     try {
       if (exec.name === TOOL_GENERATE_IMAGE) {
-        const plan = await service.plan(args as ImageArgs, exec.signal)
+        const plan = await service.plan(await sessionArgs(sessionModels, 'image', args as ImageArgs, exec), exec.signal)
         const cost = await service.estimate(plan, exec.signal)
         text = lang => t(lang, 'approval.image', {
           count: String(plan.count), model: plan.model.name, provider: plan.provider.id, cost: formatCost(lang, cost),
         })
       } else {
-        const plan = await service.planVideo(args as VideoArgs, exec.signal)
+        const plan = await service.planVideo(await sessionArgs(sessionModels, 'video', args as VideoArgs, exec), exec.signal)
         const cost = service.estimateVideo(plan)
         const duration = plan.params.duration
         text = lang => t(lang, typeof duration === 'number' ? 'approval.video' : 'approval.video.default', {

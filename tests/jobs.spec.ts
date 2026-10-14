@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   describeJob, isActive, jobRecordSchema, MAX_FAILURES, MemoryJobStore, openDomainStore, VideoJobWatcher,
-  type JobProvider, type StorageDomainService, type VideoJobRecord,
+  type JobProvider, type VideoJobRecord,
 } from '../src/jobs.ts'
 import { MediaError } from '../src/errors.ts'
+import type { StorageDomainService } from '../src/storage.ts'
 import type { VideoJobStatus } from '../src/video.ts'
 
 const MP4 = Uint8Array.from([0, 0, 0, 0x18, ...new TextEncoder().encode('ftypisom'), 1, 2, 3])
@@ -139,7 +140,8 @@ describe('job storage', () => {
           table: () => ({
             get: (k: string) => rows.get(k),
             entries: () => rows.entries(),
-            put: async (k: string, v: VideoJobRecord) => { rows.set(k, v) },
+            put: async (k: string, v: unknown) => { rows.set(k, v as VideoJobRecord) },
+            delete: async (k: string) => rows.delete(k),
           }),
           close: async () => {},
         }

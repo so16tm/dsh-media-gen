@@ -12,6 +12,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { describeJob, type VideoJobRecord, type VideoJobWatcher } from './jobs.ts'
 import type { ParameterSpec } from './openrouter.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
+import { withSessionModel, type MediaKind, type SessionModelStore } from './session-models.ts'
 import type { MediaService } from './service.ts'
 
 /** Wire names of the tools; stable across languages. */
@@ -34,10 +35,25 @@ export interface ToolConfig {
   videoJobs: Promise<VideoJobWatcher>
   /** How long a submitted job is watched before polling stops. */
   maxWatchMs: () => number
+  /** Per-session model choices, ready once their storage has opened. */
+  sessionModels: Promise<SessionModelStore>
+}
+
+/**
+ * Apply the session's model choice to arguments that name no model.
+ * @param store - session choices.
+ * @param exec - the tool call, whose agent identifies the session.
+ */
+export async function sessionArgs<A extends { model?: string | undefined; provider?: string | undefined }>(
+  store: Promise<SessionModelStore>, kind: MediaKind, args: A, exec: Pick<ToolExecution, 'agent'>,
+): Promise<A> {
+  const sessionId = sessionIdOf(exec)
+  if (sessionId === undefined || args.model !== undefined) return args
+  return withSessionModel(args, (await store).get(sessionId)?.[kind])
 }
 
 /** Session id of the calling agent, when the tool runs inside one. */
-function sessionIdOf(exec: ToolExecution): string | undefined {
+export function sessionIdOf(exec: Pick<ToolExecution, 'agent'>): string | undefined {
   const id = (exec.agent as { session?: { id?: unknown } } | undefined)?.session?.id
   return typeof id === 'string' && id.length > 0 ? id : undefined
 }
@@ -152,7 +168,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'aspect_ratio/resolution values a model accepts.',
     parameters: {
       prompt: { type: 'string', required: true, description: 'What to draw. Pass the user\'s wording; do not translate it unless asked.' },
-      model: { type: 'string', description: 'Image model id from media_list_models; omit to use the configured default.' },
+      model: { type: 'string', description: 'Image model id from media_list_models; omit to use the model chosen for this session or the configured default.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       count: { type: 'integer', description: 'Number of images (default 1).' },
       aspect_ratio: { type: 'string', description: 'Aspect ratio such as 1:1 or 16:9, if the model accepts it.' },
@@ -165,7 +181,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
     },
     timeoutMs: 600_000,
     async execute(args, exec) {
-      const plan = await service.plan(args, exec.signal)
+      const plan = await service.plan(await sessionArgs(config.sessionModels, 'image', args, exec), exec.signal)
       const cwd = await workingDirectory(ctx, exec)
       const dir = resolveOutputDir(cwd, config.outputDir)
       const result = await service.generate(plan, args.prompt, exec.signal)
@@ -199,7 +215,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       + 'model ids and the durations, resolutions, and aspect ratios a model accepts.',
     parameters: {
       prompt: { type: 'string', required: true, description: 'What the video shows. Pass the user\'s wording; do not translate it unless asked.' },
-      model: { type: 'string', description: 'Video model id from media_list_models; omit to use the configured default.' },
+      model: { type: 'string', description: 'Video model id from media_list_models; omit to use the model chosen for this session or the configured default.' },
       provider: { type: 'string', description: 'DSH provider id; needed only when several are configured.' },
       duration: { type: 'integer', description: 'Length in seconds, one the model lists.' },
       resolution: { type: 'string', description: 'Resolution such as 720p or 1080p, if the model lists it.' },
@@ -212,7 +228,7 @@ export function registerTools(ctx: Context, service: MediaService, config: ToolC
       render: (_args, value) => [{ type: 'text', text: describeJob(value as unknown as VideoJobRecord) }],
     },
     async execute(args, exec) {
-      const plan = await service.planVideo(args, exec.signal)
+      const plan = await service.planVideo(await sessionArgs(config.sessionModels, 'video', args, exec), exec.signal)
       const cwd = await workingDirectory(ctx, exec)
       const dir = resolveOutputDir(cwd, config.outputDir)
       const watcher = await config.videoJobs

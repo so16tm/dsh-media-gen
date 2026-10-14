@@ -10,6 +10,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { MediaError } from './errors.ts'
 import { slug, timestamp } from './output.ts'
+import { openDomain, type DomainSpecLike, type DomainTable, type StorageDomainService } from './storage.ts'
 import { isTerminal, sniffVideo, type CostRange, type VideoJobStatus } from './video.ts'
 
 /** Local status: the provider's, plus `stopped` when this plugin gave up watching. */
@@ -104,46 +105,23 @@ export const jobRecordSchema = {
   },
 }
 
-/** Storage-domain declaration, structurally compatible with DSH's `defineDomain` output. */
+/** Storage-domain declaration of the job records. */
 export const JOB_DOMAIN = {
   name: 'media_gen',
   version: 1,
   tables: { video_jobs: { valueSchema: jobRecordSchema } },
-} as const
+} as const satisfies DomainSpecLike
 
-interface DomainTable {
-  get(key: string): VideoJobRecord | undefined
-  values?(): IterableIterator<VideoJobRecord>
-  entries(): IterableIterator<[string, VideoJobRecord]>
-  put(key: string, value: VideoJobRecord): Promise<void>
-}
-
-/** The part of DSH's storage-domain service this plugin uses. */
-export interface StorageDomainService {
-  open(spec: typeof JOB_DOMAIN): Promise<{ table(name: 'video_jobs'): DomainTable; close(): Promise<void> }>
-}
-
-/**
- * Open the durable job store, retrying while a previous instance of this
- * plugin is still closing the domain after a reload.
- */
+/** Open the durable job store. */
 export async function openDomainStore(service: StorageDomainService, attempts = 10, delayMs = 200): Promise<JobStore> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const domain = await service.open(JOB_DOMAIN)
-      const table = domain.table('video_jobs')
-      return {
-        durable: true,
-        list: () => [...table.entries()].map(([, value]) => value),
-        get: id => table.get(id),
-        put: record => table.put(record.id, record),
-        close: () => domain.close(),
-      }
-    } catch (error) {
-      const code = isRecord(error) ? error.code : undefined
-      if (code !== 'already-open' || attempt >= attempts) throw error
-      await new Promise(resolve => setTimeout(resolve, delayMs))
-    }
+  const domain = await openDomain(service, JOB_DOMAIN, attempts, delayMs)
+  const table = domain.table('video_jobs') as DomainTable<VideoJobRecord>
+  return {
+    durable: true,
+    list: () => [...table.entries()].map(([, value]) => value),
+    get: id => table.get(id),
+    put: record => table.put(record.id, record),
+    close: () => domain.close(),
   }
 }
 
