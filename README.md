@@ -8,6 +8,8 @@
 
 An image and video generation plugin for DeepSeek Harness (DSH). It reuses the providers and credentials configured in DSH, so you do not need to register API keys twice.
 
+**Currently, only OpenRouter is supported for image and video generation.** Other providers configured in DSH are not supported.
+
 - [Design policy](docs/policy.md) (Japanese)
 - [Initial integration investigation](docs/investigation.md) (Japanese)
 

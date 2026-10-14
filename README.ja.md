@@ -8,6 +8,8 @@
 
 DeepSeek Harness（DSH）向けの画像・動画生成プラグインです。DSH に設定済みのプロバイダーと認証情報をそのまま使い、API キーを二重に登録させません。
 
+**現状、画像・動画生成ともに OpenRouter のみ対応しています。** DSH に設定された他のプロバイダーには対応していません。
+
 - 方針：[docs/policy.md](docs/policy.md)
 - 段階0 接続調査：[docs/investigation.md](docs/investigation.md)
 
