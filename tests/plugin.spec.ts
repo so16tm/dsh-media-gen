@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, Config } from '../src/index.ts'
+import type { DomainSpecLike, StorageDomainService } from '../src/storage.ts'
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
 
@@ -24,7 +25,36 @@ function fakeAgent(id: string, status = 'idle'): FakeAgent {
   return agent
 }
 
-function fakeContext(agents: FakeAgent[] = []) {
+/** In-memory stand-in for DSH's storage-domain service. */
+function memoryStorage(): StorageDomainService {
+  const domains = new Map<string, Map<string, Map<string, unknown>>>()
+  return {
+    async open(spec: DomainSpecLike) {
+      const tables = domains.get(spec.name) ?? new Map<string, Map<string, unknown>>()
+      domains.set(spec.name, tables)
+      return {
+        table: (name: string) => {
+          const rows = tables.get(name) ?? new Map<string, unknown>()
+          tables.set(name, rows)
+          const schema = spec.tables[name]!.valueSchema
+          return {
+            get: (k: string) => rows.get(k),
+            entries: () => rows.entries(),
+            put: async (k: string, v: unknown) => { rows.set(k, schema.parse(v)) },
+            delete: async (k: string) => rows.delete(k),
+          }
+        },
+        close: async () => {},
+      }
+    },
+  }
+}
+
+/**
+ * Fake plugin context. `storage` says whether DSH's storage service is there
+ * when the plugin starts, arrives after it (call `provideStorage`), or is absent.
+ */
+function fakeContext(agents: FakeAgent[] = [], storage: 'present' | 'late' | 'none' = 'present') {
   const listeners = new Map<string, (...args: never[]) => unknown>()
   const tools: { name: string; execute(args: unknown, exec: unknown): Promise<unknown> }[] = []
   const disposers: (() => unknown)[] = []
@@ -33,7 +63,10 @@ function fakeContext(agents: FakeAgent[] = []) {
     credentials: { resolve: async () => ({ value: 'sk-or-k' }) },
     agents: { get: (id: string) => agents.find(a => a.session.id === id) },
     commands: { register: (command: { name: string }) => { commands.push(command) } },
+    ...storage === 'present' ? { storageDomain: memoryStorage() } : {},
   }
+  const waiting: { deps: string[]; fn: (c: Record<string, unknown>) => void }[] = []
+  const run = (deps: string[], fn: (c: Record<string, unknown>) => void) => fn(Object.fromEntries(deps.map(d => [d, services[d]])))
   const ctx = {
     llm: {
       listProviders: () => [{ id: 'openrouter', name: 'OpenRouter' }],
@@ -44,11 +77,16 @@ function fakeContext(agents: FakeAgent[] = []) {
     get: (name: string) => services[name],
     effect: (fn: () => () => unknown) => { disposers.push(fn()) },
     inject: (deps: string[], fn: (c: Record<string, unknown>) => void) => {
-      if (deps.every(d => services[d] !== undefined)) fn(Object.fromEntries(deps.map(d => [d, services[d]])))
+      if (deps.every(d => services[d] !== undefined)) run(deps, fn)
+      else waiting.push({ deps, fn })
     },
     logger: { warn: () => {} },
   }
-  return { ctx, listeners, tools, commands, dispose: async () => { for (const d of disposers) await d() } }
+  const provideStorage = () => {
+    services.storageDomain = memoryStorage()
+    for (const w of waiting.splice(0)) if (w.deps.every(d => services[d] !== undefined)) run(w.deps, w.fn)
+  }
+  return { ctx, listeners, tools, commands, provideStorage, dispose: async () => { for (const d of disposers) await d() } }
 }
 
 function stubNetwork() {
@@ -111,13 +149,23 @@ describe('plugin apply', () => {
     const tool = (name: string) => tools.find(t => t.name === name)!
     const exec = { signal: new AbortController().signal }
     expect(await tool('media_set_prompt_notes').execute({ model: ' v/vid ', notes: 'English only; one sentence per shot.' }, exec))
-      .toMatchObject({ model: 'v/vid', notes: 'English only; one sentence per shot.', durable: false })
+      .toMatchObject({ model: 'v/vid', notes: 'English only; one sentence per shot.', durable: true })
     const listing = await tool('media_list_models').execute({ kind: 'video' }, exec) as { providers: { videoModels: { id: string; promptNotes?: string }[] }[] }
     expect(listing.providers[0]?.videoModels[0]).toMatchObject({ id: 'v/vid', promptNotes: 'English only; one sentence per shot.' })
     expect(await tool('media_get_prompt_notes').execute({}, exec)).toMatchObject({ notes: [{ model: 'v/vid' }] })
     await expect(tool('media_set_prompt_notes').execute({ model: 'v/vid', notes: 'x'.repeat(2001) }, exec)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
     expect(await tool('media_set_prompt_notes').execute({ model: 'v/vid', notes: ' ' }, exec)).toMatchObject({ deleted: true })
     expect(await tool('media_get_prompt_notes').execute({ model: 'v/vid' }, exec)).toMatchObject({ notes: [] })
+    await dispose()
+  })
+
+  it('waits for a storage service that starts after the plugin', async () => {
+    stubNetwork()
+    const { ctx, tools, provideStorage, dispose } = fakeContext([], 'late')
+    apply(ctx as never, Config({}) as never)
+    const saved = tools.find(t => t.name === 'media_set_prompt_notes')!.execute({ model: 'v/vid', notes: 'English only.' }, { signal: new AbortController().signal })
+    provideStorage()
+    expect(await saved).toMatchObject({ durable: true })
     await dispose()
   })
 

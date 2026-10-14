@@ -132,6 +132,9 @@ const JOBS_COMMAND = 'media-jobs'
 /** Message source of this plugin's in-session notices. */
 const SOURCE_KIND = 'plugin:dsh-media-gen'
 
+/** How long to wait for DSH's storage service before keeping records in memory only. */
+const STORAGE_WAIT_MS = 10_000
+
 /** Prompt excerpt length shown in the approval prompt; the agent writes the prompt, so most of it is shown. */
 const PROMPT_PREVIEW = 1500
 
@@ -181,13 +184,21 @@ export function apply(ctx: Context, config: Config): void {
     return true
   }
 
-  const storageDomain = get('storageDomain') as StorageDomainService | undefined
-  const store: Promise<JobStore> = storageDomain === undefined
-    ? Promise.resolve(new MemoryJobStore())
-    : openDomainStore(storageDomain).catch((error: unknown) => {
+  // DSH's storage-domain plugin may start after this one, so wait for its service instead of reading it once.
+  const storageDomain = new Promise<StorageDomainService | undefined>((resolve) => {
+    const present = get('storageDomain') as StorageDomainService | undefined
+    if (present !== undefined) { resolve(present); return }
+    const timer = setTimeout(() => { resolve(undefined) }, STORAGE_WAIT_MS)
+    timer.unref?.()
+    ;(ctx as unknown as { inject(deps: string[], fn: (c: { storageDomain: StorageDomainService }) => void): void })
+      .inject(['storageDomain'], (c) => { clearTimeout(timer); resolve(c.storageDomain) })
+  })
+  const store: Promise<JobStore> = storageDomain.then(domain => domain === undefined
+    ? new MemoryJobStore()
+    : openDomainStore(domain).catch((error: unknown) => {
       ctx.logger.warn(`dsh-media-gen: video jobs will not survive a restart; job storage failed to open: ${String(error)}`)
       return new MemoryJobStore()
-    })
+    }))
   const videoJobs = store.then((jobs) => {
     const watcher = new VideoJobWatcher(jobs, service, () => ({
       pollIntervalMs: config.videoPollIntervalMs.get(),
@@ -214,20 +225,20 @@ export function apply(ctx: Context, config: Config): void {
       })
     })
 
-  const sessionModels: Promise<SessionModelStore> = storageDomain === undefined
-    ? Promise.resolve(new MemorySessionModelStore())
-    : openSessionModelStore(storageDomain).catch((error: unknown) => {
+  const sessionModels: Promise<SessionModelStore> = storageDomain.then(domain => domain === undefined
+    ? new MemorySessionModelStore()
+    : openSessionModelStore(domain).catch((error: unknown) => {
       ctx.logger.warn(`dsh-media-gen: session model choices will not survive a restart; their storage failed to open: ${String(error)}`)
       return new MemorySessionModelStore()
-    })
+    }))
   ctx.effect(() => async () => { await (await sessionModels).close?.() })
 
-  const promptNotes: Promise<PromptNoteStore> = storageDomain === undefined
-    ? Promise.resolve(new MemoryPromptNoteStore())
-    : openPromptNoteStore(storageDomain).catch((error: unknown) => {
+  const promptNotes: Promise<PromptNoteStore> = storageDomain.then(domain => domain === undefined
+    ? new MemoryPromptNoteStore()
+    : openPromptNoteStore(domain).catch((error: unknown) => {
       ctx.logger.warn(`dsh-media-gen: prompt notes will not survive a restart; their storage failed to open: ${String(error)}`)
       return new MemoryPromptNoteStore()
-    })
+    }))
   ctx.effect(() => async () => { await (await promptNotes).close?.() })
 
   const generateConfig = {
