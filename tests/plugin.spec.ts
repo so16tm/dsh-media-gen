@@ -370,23 +370,25 @@ describe('plugin apply', () => {
     const decision = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
     expect(decision.reason).toContain('Generate a 4-second video')
   })
-  it('hides and refuses generation in a subagent, whose approval questions never reach the user', async () => {
+  it('lets a subagent generate only where the user allowed generation without asking', async () => {
     stubNetwork()
-    const { ctx, listeners } = fakeContext()
-    apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
-    const created = listeners.get('agent/created') as unknown as (payload: unknown) => unknown
-    const restricted: unknown[] = []
-    const child = { session: { id: 'c1', header: { origin: 'subagent' } }, ctx: { tools: { restrict: (f: unknown) => { restricted.push(f) } } } }
-    const root = { session: { id: 'r1', header: {} }, ctx: { tools: { restrict: (f: unknown) => { restricted.push(f) } } } }
-    created({ agent: child })
-    created({ agent: root })
-    expect(restricted).toEqual([{ deny: ['media_generate_image', 'media_generate_video', 'media_set_prompt_notes'] }])
+    const parent = Object.assign(fakeAgent('p1'), { session: { id: 'p1', header: {} } })
+    const { ctx, listeners, commands } = fakeContext([parent])
+    apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
     const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
     const signal = new AbortController().signal
-    const denied = await hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal, agent: child }, async () => ({ kind: 'allow' }))
+    const child = { session: { id: 'c1', header: { origin: 'subagent', parentSession: 'p1' } } }
+    const call = (name: string, args: unknown) => hook({ name, arguments: args, signal, agent: child }, async () => ({ kind: 'allow' }))
+    const denied = await call('media_generate_image', { prompts: ['x'] })
     expect(denied.kind).toBe('deny')
-    expect(denied.reason).toContain('not available to a subagent')
-    expect(await hook({ name: 'media_list_models', arguments: {}, signal, agent: child }, async () => ({ kind: 'allow' }))).toEqual({ kind: 'allow' })
+    expect(denied.reason).toContain('a subagent cannot ask the user')
+    expect((await call('media_set_prompt_notes', { model: 'g/img', notes: 'x' })).kind).toBe('deny')
+    expect(await call('media_list_models', {})).toEqual({ kind: 'allow' })
+    await commands.find(c => c.name === 'media-approval')!.handler!({ agent: parent, rawInput: 'on', signal })
+    // Bulk work in the allowed conversation: every call goes ahead without a question no one would see.
+    expect((await call('media_generate_image', { prompts: ['x'] })).kind).toBe('allow')
+    expect((await call('media_generate_image', { prompts: ['y'] })).kind).toBe('allow')
+    expect((await call('media_generate_image', { prompts: ['z'], input_images: ['/elsewhere/a.png'] })).kind).toBe('deny')
   })
 
   it('refuses a generation in a turn a notice started, and asks for a second one in the user\'s turn', async () => {
