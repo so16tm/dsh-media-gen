@@ -8,11 +8,19 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
+import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { MediaError } from './errors.ts'
+import { convertToPng } from './image-convert.ts'
 import { sniffImage } from './output.ts'
 
 /** Largest input image accepted. */
 export const MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
+
+/**
+ * Formats video models take as frames and references. OpenRouter's video
+ * models (Veo among them) refuse WebP with "Expected JPEG or PNG".
+ */
+export const VIDEO_INPUT_TYPES: readonly ImageMediaType[] = ['image/png', 'image/jpeg']
 
 /** Most input images one call may carry. */
 export const MAX_INPUT_IMAGES = 16
@@ -52,9 +60,13 @@ export function outsidePaths(paths: readonly string[], cwd: string): string[] {
  * Read one input image.
  * @param path - absolute, or relative to `cwd`.
  * @param cwd - the session working directory.
+ * @param accept - formats the model takes; another format is re-encoded as
+ * PNG. Undefined sends the file as it is.
  * @throws MediaError INVALID_REQUEST when the file is missing, too large, or not an image.
  */
-export async function loadInputImage(path: string, cwd: string, maxBytes = MAX_INPUT_IMAGE_BYTES): Promise<InputImage> {
+export async function loadInputImage(
+  path: string, cwd: string, maxBytes = MAX_INPUT_IMAGE_BYTES, accept?: readonly ImageMediaType[],
+): Promise<InputImage> {
   const full = isAbsolute(path) ? path : resolve(cwd, path)
   let size: number
   try {
@@ -65,15 +77,19 @@ export async function loadInputImage(path: string, cwd: string, maxBytes = MAX_I
     throw new MediaError('INVALID_REQUEST', `input image not found: ${path}`)
   }
   if (size > maxBytes) throw new MediaError('INVALID_REQUEST', `input image ${path} is ${size} bytes, above the ${maxBytes}-byte limit`)
-  const data = new Uint8Array(await readFile(full))
-  const mediaType = sniffImage(data)
+  let data: Uint8Array = new Uint8Array(await readFile(full))
+  let mediaType = sniffImage(data)
   if (mediaType === undefined) throw new MediaError('INVALID_REQUEST', `${path} is not a PNG, JPEG, WebP, or GIF image`)
+  if (accept !== undefined && !accept.includes(mediaType)) {
+    data = await convertToPng(data, mediaType, path)
+    mediaType = 'image/png'
+  }
   return { path: full, mediaType, bytes: data.byteLength, dataUrl: `data:${mediaType};base64,${Buffer.from(data).toString('base64')}` }
 }
 
 /** Read several input images in order. */
-export async function loadInputImages(paths: readonly string[], cwd: string): Promise<InputImage[]> {
+export async function loadInputImages(paths: readonly string[], cwd: string, accept?: readonly ImageMediaType[]): Promise<InputImage[]> {
   const out: InputImage[] = []
-  for (const path of paths) out.push(await loadInputImage(path, cwd))
+  for (const path of paths) out.push(await loadInputImage(path, cwd, MAX_INPUT_IMAGE_BYTES, accept))
   return out
 }

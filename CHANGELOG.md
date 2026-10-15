@@ -2,6 +2,10 @@
 
 各版は `v<版>` のタグで公開します。`dsh plugin --profile <profile> add git+https://github.com/so16tm/dsh-media-gen.git#v<版>` で、その版を入れられます。
 
+## 未公開
+
+- 動画の最初・最後のフレームと参照画像が WebP や GIF のとき、PNG に変換して送る。Veo など JPEG と PNG しか受け付けないモデルで「Unsupported image format」になっていた。
+
 ## v0.1.0
 
 対応 DSH: `0.2.0-rc.2` 以降の `0.2.x`（確認済み：`0.2.0-rc.2`）
