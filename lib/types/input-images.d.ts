@@ -9,6 +9,19 @@
 export declare const MAX_INPUT_IMAGE_BYTES: number;
 /** Most input images one call may carry. */
 export declare const MAX_INPUT_IMAGES = 16;
+/**
+ * The `imageCompat` service of dsh-small-improvements, when installed. It
+ * re-encodes WebP as PNG or JPEG for models that do not accept WebP.
+ */
+export interface ImageCompat {
+    needsConversion(mediaType: string): boolean;
+    toCompatible(data: Uint8Array, mediaType: string, options?: {
+        maxBytes?: number;
+    }): Promise<{
+        data: Uint8Array;
+        mediaType: string;
+    }>;
+}
 /** One loaded input image. */
 export interface InputImage {
     path: string;
@@ -32,8 +45,9 @@ export declare function outsidePaths(paths: readonly string[], cwd: string): str
  * Read one input image.
  * @param path - absolute, or relative to `cwd`.
  * @param cwd - the session working directory.
+ * @param compat - when given, a WebP is sent as PNG or JPEG; a failed conversion sends it unchanged.
  * @throws MediaError INVALID_REQUEST when the file is missing, too large, or not an image.
  */
-export declare function loadInputImage(path: string, cwd: string, maxBytes?: number): Promise<InputImage>;
+export declare function loadInputImage(path: string, cwd: string, maxBytes?: number, compat?: ImageCompat): Promise<InputImage>;
 /** Read several input images in order. */
-export declare function loadInputImages(paths: readonly string[], cwd: string): Promise<InputImage[]>;
+export declare function loadInputImages(paths: readonly string[], cwd: string, compat?: ImageCompat): Promise<InputImage[]>;

@@ -10,7 +10,7 @@ import type { VideoJobRecord, VideoJobWatcher } from './jobs.ts'
 import type { MediaFileIndex } from './media-files.ts'
 import { MediaError } from './errors.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
-import { loadInputImage, loadInputImages } from './input-images.ts'
+import { loadInputImage, loadInputImages, type ImageCompat } from './input-images.ts'
 import type { ImagePlan, LoadedVideoInputs, MediaService, VideoPlan } from './service.ts'
 
 /** Prompt excerpt stored with a video job. */
@@ -44,6 +44,11 @@ export async function workingDirectory(ctx: Context, caller: Caller): Promise<st
   if (service !== undefined && agent !== undefined) return service.ensure(agent, caller.signal)
   const cwd = agent?.session?.header?.cwd
   return typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
+}
+
+/** The `imageCompat` service of dsh-small-improvements, when installed. */
+function imageCompat(ctx: Context): ImageCompat | undefined {
+  return (ctx as unknown as { get(name: string): unknown }).get('imageCompat') as ImageCompat | undefined
 }
 
 /** Output settings generation needs. */
@@ -94,7 +99,7 @@ export async function runImagePlan(
   const cwd = await workingDirectory(ctx, caller)
   const dir = resolveOutputDir(cwd, config.outputDir)
   // Inputs are read before the request, so a missing file fails before anything is billed.
-  const inputs = await loadInputImages(plan.inputs, cwd)
+  const inputs = await loadInputImages(plan.inputs, cwd, imageCompat(ctx))
   const attachments: AttachmentStore | undefined = ctx.get('attachments')
   const saved: Awaited<ReturnType<typeof saveImages>>['saved'] = []
   let attachmentFailures = 0
@@ -149,10 +154,11 @@ export async function startVideoPlan(
   const cwd = await workingDirectory(ctx, caller)
   const dir = resolveOutputDir(cwd, config.outputDir)
   const watcher = await config.videoJobs
+  const compat = imageCompat(ctx)
   const inputs: LoadedVideoInputs = {
-    ...plan.inputs.first === undefined ? {} : { first: await loadInputImage(plan.inputs.first, cwd) },
-    ...plan.inputs.last === undefined ? {} : { last: await loadInputImage(plan.inputs.last, cwd) },
-    references: await loadInputImages(plan.inputs.references, cwd),
+    ...plan.inputs.first === undefined ? {} : { first: await loadInputImage(plan.inputs.first, cwd, undefined, compat) },
+    ...plan.inputs.last === undefined ? {} : { last: await loadInputImage(plan.inputs.last, cwd, undefined, compat) },
+    references: await loadInputImages(plan.inputs.references, cwd, compat),
   }
   const state = await service.submitVideo(plan, prompt, caller.signal, inputs)
   const now = new Date()

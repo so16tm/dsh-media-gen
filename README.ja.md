@@ -114,6 +114,7 @@ DSH の Models 設定に OpenRouter プロバイダーを追加し、API キー�
 ## 制限事項
 
 - 入力画像は OpenRouter へ送信します。PNG・JPEG・WebP・GIF の 20 MiB 以下で、モデルが指定の入力画像・フレームに対応している必要があります。API キーはブラウザーに渡しません。
+- [dsh-small-improvements](https://github.com/so16tm/dsh-small-improvements) を入れると、WebP の入力画像は PNG（透過あり）または JPEG に変換して送ります。WebP 非対応のモデルでも使えます。
 - 保存先に `Pictures` のような一般的な名前を使わないでください。過去の出力を表示するため、画像の配信経路は同じ保存先フォルダー名の画像も扱い、作業ディレクトリを区別しません。
 - 動画プレビューは mp4・m4v・webm・mov の 32 MiB 以下です。ダウンロードの上限とは異なります。
 - 秒数を省略した動画に `maxVideoSeconds` を適用できるのは、モデル一覧に対応する秒数がある場合だけです。

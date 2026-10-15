@@ -37,6 +37,26 @@ describe('input images', () => {
     await expect(loadInputImage('cat.png', dir, 4)).rejects.toThrow('limit')
   })
 
+  it('hands WebP to the imageCompat service and keeps the original when it fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'media-input-'))
+    const webp = Uint8Array.from([0x52, 0x49, 0x46, 0x46, 4, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 1, 2])
+    await writeFile(join(dir, 'cat.webp'), webp)
+    await writeFile(join(dir, 'cat.png'), PNG)
+    const calls: string[] = []
+    const compat = {
+      needsConversion: (type: string) => type === 'image/webp',
+      toCompatible: async (_data: Uint8Array, type: string) => { calls.push(type); return { data: PNG, mediaType: 'image/png' } },
+    }
+    expect(await loadInputImage('cat.webp', dir, undefined, compat)).toMatchObject({
+      mediaType: 'image/png', bytes: PNG.byteLength, dataUrl: `data:image/png;base64,${Buffer.from(PNG).toString('base64')}`,
+    })
+    expect(await loadInputImage('cat.png', dir, undefined, compat)).toMatchObject({ mediaType: 'image/png' })
+    expect(calls).toEqual(['image/webp'])
+    const failing = { ...compat, toCompatible: async () => { throw new Error('boom') } }
+    expect(await loadInputImage('cat.webp', dir, undefined, failing)).toMatchObject({ mediaType: 'image/webp', bytes: webp.byteLength })
+    expect(await loadInputImage('cat.webp', dir)).toMatchObject({ mediaType: 'image/webp' })
+  })
+
   it('sends references and frames in the documented request shapes', async () => {
     const image = recorder({ data: [{ b64_json: Buffer.from(PNG).toString('base64') }] })
     await image.adapter.generateImage({ model: 'm', prompt: 'p', params: {}, inputReferences: ['data:image/png;base64,AA'] })

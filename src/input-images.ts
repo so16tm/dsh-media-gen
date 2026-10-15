@@ -17,6 +17,15 @@ export const MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
 /** Most input images one call may carry. */
 export const MAX_INPUT_IMAGES = 16
 
+/**
+ * The `imageCompat` service of dsh-small-improvements, when installed. It
+ * re-encodes WebP as PNG or JPEG for models that do not accept WebP.
+ */
+export interface ImageCompat {
+  needsConversion(mediaType: string): boolean
+  toCompatible(data: Uint8Array, mediaType: string, options?: { maxBytes?: number }): Promise<{ data: Uint8Array; mediaType: string }>
+}
+
 /** One loaded input image. */
 export interface InputImage {
   path: string
@@ -52,9 +61,10 @@ export function outsidePaths(paths: readonly string[], cwd: string): string[] {
  * Read one input image.
  * @param path - absolute, or relative to `cwd`.
  * @param cwd - the session working directory.
+ * @param compat - when given, a WebP is sent as PNG or JPEG; a failed conversion sends it unchanged.
  * @throws MediaError INVALID_REQUEST when the file is missing, too large, or not an image.
  */
-export async function loadInputImage(path: string, cwd: string, maxBytes = MAX_INPUT_IMAGE_BYTES): Promise<InputImage> {
+export async function loadInputImage(path: string, cwd: string, maxBytes = MAX_INPUT_IMAGE_BYTES, compat?: ImageCompat): Promise<InputImage> {
   const full = isAbsolute(path) ? path : resolve(cwd, path)
   let size: number
   try {
@@ -65,15 +75,23 @@ export async function loadInputImage(path: string, cwd: string, maxBytes = MAX_I
     throw new MediaError('INVALID_REQUEST', `input image not found: ${path}`)
   }
   if (size > maxBytes) throw new MediaError('INVALID_REQUEST', `input image ${path} is ${size} bytes, above the ${maxBytes}-byte limit`)
-  const data = new Uint8Array(await readFile(full))
-  const mediaType = sniffImage(data)
-  if (mediaType === undefined) throw new MediaError('INVALID_REQUEST', `${path} is not a PNG, JPEG, WebP, or GIF image`)
+  let data: Uint8Array = new Uint8Array(await readFile(full))
+  const sniffed = sniffImage(data)
+  if (sniffed === undefined) throw new MediaError('INVALID_REQUEST', `${path} is not a PNG, JPEG, WebP, or GIF image`)
+  let mediaType: string = sniffed
+  if (compat?.needsConversion(mediaType) === true) {
+    try {
+      ;({ data, mediaType } = await compat.toCompatible(data, mediaType, { maxBytes }))
+    } catch {
+      // Most models accept WebP, so the original is still worth sending.
+    }
+  }
   return { path: full, mediaType, bytes: data.byteLength, dataUrl: `data:${mediaType};base64,${Buffer.from(data).toString('base64')}` }
 }
 
 /** Read several input images in order. */
-export async function loadInputImages(paths: readonly string[], cwd: string): Promise<InputImage[]> {
+export async function loadInputImages(paths: readonly string[], cwd: string, compat?: ImageCompat): Promise<InputImage[]> {
   const out: InputImage[] = []
-  for (const path of paths) out.push(await loadInputImage(path, cwd))
+  for (const path of paths) out.push(await loadInputImage(path, cwd, MAX_INPUT_IMAGE_BYTES, compat))
   return out
 }

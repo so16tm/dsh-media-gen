@@ -114,6 +114,7 @@ For polling, tracking, timeout, cache, and download-size settings, see the [conf
 ## Limitations
 
 - Input images are sent to OpenRouter. Only PNG, JPEG, WebP, and GIF up to 20 MiB are accepted, and the model must support the requested input images or frames. API keys are not sent to the browser.
+- With [dsh-small-improvements](https://github.com/so16tm/dsh-small-improvements) installed, WebP input images are sent as PNG (with transparency) or JPEG, for models that do not accept WebP.
 - Avoid common output-folder names such as `Pictures`. To display older outputs, the image route also accepts images in matching output folders without distinguishing working directories.
 - Video previews support mp4, m4v, webm, and mov up to 32 MiB, independently of the download limit.
 - When duration is omitted, `maxVideoSeconds` can limit the model's default only if its catalog lists supported durations.
