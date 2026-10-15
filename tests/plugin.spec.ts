@@ -370,25 +370,36 @@ describe('plugin apply', () => {
     const decision = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
     expect(decision.reason).toContain('Generate a 4-second video')
   })
-  it('lets a subagent generate only where the user allowed generation without asking', async () => {
+  it('puts a subagent\'s generation to the user in the delegating conversation, or lets it through where allowed', async () => {
     stubNetwork()
     const parent = Object.assign(fakeAgent('p1'), { session: { id: 'p1', header: {} } })
     const { ctx, listeners, commands } = fakeContext([parent])
+    const asked: { agent: unknown; displayReason: Record<string, string> }[] = []
+    let answer: string | Error = 'allowed-once'
+    ;(ctx as unknown as { get(name: string): unknown }).get = ((get) => (name: string) => name === 'approval'
+      ? { request: async (req: (typeof asked)[number]) => { asked.push(req); if (answer instanceof Error) throw answer; return answer } }
+      : get(name))(ctx.get)
     apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
     const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
     const signal = new AbortController().signal
     const child = { session: { id: 'c1', header: { origin: 'subagent', parentSession: 'p1' } } }
     const call = (name: string, args: unknown) => hook({ name, arguments: args, signal, agent: child }, async () => ({ kind: 'allow' }))
-    const denied = await call('media_generate_image', { prompts: ['x'] })
-    expect(denied.kind).toBe('deny')
-    expect(denied.reason).toContain('a subagent cannot ask the user')
+    expect((await call('media_generate_image', { prompts: ['x'] })).kind).toBe('allow')
+    expect(asked[0]?.agent).toBe(parent)
+    expect(asked[0]?.displayReason.ja).toContain('サブエージェントからの生成です')
+    expect(asked[0]?.displayReason.ja).toContain('概算料金')
+    answer = 'rejected'
+    expect(await call('media_generate_image', { prompts: ['x'] })).toMatchObject({ kind: 'deny', reason: expect.stringContaining('declined') })
+    answer = new Error('outside an open turn')
+    expect(await call('media_generate_image', { prompts: ['x'] })).toMatchObject({ kind: 'deny', reason: expect.stringContaining('not in a turn') })
     expect((await call('media_set_prompt_notes', { model: 'g/img', notes: 'x' })).kind).toBe('deny')
     expect(await call('media_list_models', {})).toEqual({ kind: 'allow' })
+    // Bulk work in a conversation that allows generation: no question at all.
+    asked.length = 0
     await commands.find(c => c.name === 'media-approval')!.handler!({ agent: parent, rawInput: 'on', signal })
-    // Bulk work in the allowed conversation: every call goes ahead without a question no one would see.
     expect((await call('media_generate_image', { prompts: ['x'] })).kind).toBe('allow')
     expect((await call('media_generate_image', { prompts: ['y'] })).kind).toBe('allow')
-    expect((await call('media_generate_image', { prompts: ['z'], input_images: ['/elsewhere/a.png'] })).kind).toBe('deny')
+    expect(asked).toHaveLength(0)
   })
 
   it('refuses a generation in a turn a notice started, and asks for a second one in the user\'s turn', async () => {
