@@ -10,7 +10,7 @@ import type { VideoJobRecord, VideoJobWatcher } from './jobs.ts'
 import type { MediaFileIndex } from './media-files.ts'
 import { MediaError } from './errors.ts'
 import { resolveOutputDir, saveImages } from './output.ts'
-import { loadInputImage, loadInputImages } from './input-images.ts'
+import { loadInputImage, loadInputImages, MAX_INPUT_IMAGE_BYTES, VIDEO_INPUT_TYPES } from './input-images.ts'
 import type { ImagePlan, LoadedVideoInputs, MediaService, VideoPlan } from './service.ts'
 
 /** Prompt excerpt stored with a video job. */
@@ -150,9 +150,9 @@ export async function startVideoPlan(
   const dir = resolveOutputDir(cwd, config.outputDir)
   const watcher = await config.videoJobs
   const inputs: LoadedVideoInputs = {
-    ...plan.inputs.first === undefined ? {} : { first: await loadInputImage(plan.inputs.first, cwd) },
-    ...plan.inputs.last === undefined ? {} : { last: await loadInputImage(plan.inputs.last, cwd) },
-    references: await loadInputImages(plan.inputs.references, cwd),
+    ...plan.inputs.first === undefined ? {} : { first: await loadInputImage(plan.inputs.first, cwd, MAX_INPUT_IMAGE_BYTES, VIDEO_INPUT_TYPES) },
+    ...plan.inputs.last === undefined ? {} : { last: await loadInputImage(plan.inputs.last, cwd, MAX_INPUT_IMAGE_BYTES, VIDEO_INPUT_TYPES) },
+    references: await loadInputImages(plan.inputs.references, cwd, VIDEO_INPUT_TYPES),
   }
   const state = await service.submitVideo(plan, prompt, caller.signal, inputs)
   const now = new Date()

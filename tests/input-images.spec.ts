@@ -1,13 +1,29 @@
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { inflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { parseImageCommand, parseVideoCommand } from '../src/direct.ts'
-import { inputPaths, loadInputImage, MAX_INPUT_IMAGES } from '../src/input-images.ts'
+import { inputPaths, loadInputImage, loadInputImages, MAX_INPUT_IMAGES, VIDEO_INPUT_TYPES } from '../src/input-images.ts'
 import { OpenRouterAdapter } from '../src/openrouter.ts'
 import { estimateVideoCost, parseVideoModels, validateVideoInputs } from '../src/video.ts'
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+// 3x2 lossless WebP: red, with a half-transparent green pixel at (1, 0).
+const WEBP = Buffer.from('UklGRiAAAABXRUJQVlA4TBMAAAAvAkAAEA8w//sfD/wPByMQ0f8IAA==', 'base64')
+// 2x2 GIF: red, with a blue pixel at (1, 1).
+const GIF = Buffer.from('R0lGODdhAgACAIEAAP8AAAAA/wAAAAAAACwAAAAAAgACAAAIBgABCAwQEAA7', 'base64')
+
+/** Width, height, and RGBA rows of an 8-bit RGBA PNG without filters, as encodePng writes it. */
+function readPng(dataUrl: string) {
+  const png = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64')
+  const width = png.readUInt32BE(16)
+  const height = png.readUInt32BE(20)
+  const idat = png.indexOf('IDAT')
+  const raw = inflateSync(png.subarray(idat + 4, idat + 4 + png.readUInt32BE(idat - 4)))
+  const rows = Array.from({ length: height }, (_, y) => [...raw.subarray(y * (width * 4 + 1) + 1, (y + 1) * (width * 4 + 1))])
+  return { width, height, rows }
+}
 
 function recorder(body: unknown) {
   const calls: { url: string; init: RequestInit }[] = []
@@ -35,6 +51,24 @@ describe('input images', () => {
     await expect(loadInputImage('note.txt', dir)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
     await expect(loadInputImage('missing.png', dir)).rejects.toThrow('not found')
     await expect(loadInputImage('cat.png', dir, 4)).rejects.toThrow('limit')
+  })
+
+  it('re-encodes WebP and GIF as PNG for formats a video model takes, and leaves other images alone', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'media-input-'))
+    await writeFile(join(dir, 'frame.webp'), WEBP)
+    await writeFile(join(dir, 'frame.gif'), GIF)
+    await writeFile(join(dir, 'cat.png'), PNG)
+    await writeFile(join(dir, 'broken.webp'), WEBP.subarray(0, 24))
+    expect(await loadInputImage('frame.webp', dir)).toMatchObject({ mediaType: 'image/webp', bytes: WEBP.byteLength })
+
+    const [webp, gif, png] = await loadInputImages(['frame.webp', 'frame.gif', 'cat.png'], dir, VIDEO_INPUT_TYPES)
+    expect(webp).toMatchObject({ path: join(dir, 'frame.webp'), mediaType: 'image/png' })
+    expect(webp?.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
+    const red = [255, 0, 0, 255]
+    expect(readPng(webp!.dataUrl)).toEqual({ width: 3, height: 2, rows: [[...red, 0, 255, 0, 128, ...red], [...red, ...red, ...red]] })
+    expect(readPng(gif!.dataUrl)).toEqual({ width: 2, height: 2, rows: [[...red, ...red], [...red, 0, 0, 255, 255]] })
+    expect(png?.dataUrl).toBe(`data:image/png;base64,${Buffer.from(PNG).toString('base64')}`)
+    await expect(loadInputImage('broken.webp', dir, undefined, VIDEO_INPUT_TYPES)).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
   })
 
   it('sends references and frames in the documented request shapes', async () => {
