@@ -122,17 +122,6 @@ interface AgentRegistry {
   get(sessionId: string): AgentLike | undefined
 }
 
-/** The part of DSH's approval service this plugin uses to ask in a delegating conversation. */
-interface ApprovalLike {
-  request(req: {
-    agent: unknown
-    toolName: string
-    reason?: string
-    displayReason?: { en: string; [locale: string]: string }
-    signal?: AbortSignal
-  }): Promise<string>
-}
-
 /** The part of DSH's command registry this plugin uses. */
 interface CommandRegistry {
   register(definition: {
@@ -162,16 +151,10 @@ const PROMPT_PREVIEW = 1500
 const SUBAGENT_NOTES_REASON = 'Prompt notes cannot be saved from a subagent: saving them needs the user\'s approval, which a '
   + 'subagent cannot get. Tell the delegating agent what to save instead.'
 
-/** Model-facing refusal of a subagent's generation when no question could reach the user. */
-const SUBAGENT_REASON = 'Not run and nothing was charged. This is not the user declining: generation needs the user\'s '
-  + 'approval, and the question could not be shown because the delegating conversation is no longer in a turn. Do not try '
-  + 'again. Finish without generating and tell the delegating agent that the question could not be shown; the user can '
-  + 'allow generation in the conversation ("Allow in this conversation" in the chat input\'s Media menu, or /media-approval on) '
-  + 'for bulk work in subagents.'
-
-/** Model-facing refusal of a subagent's generation the user declined. */
-const SUBAGENT_DECLINED = 'Not run and nothing was charged: the user declined this generation. Do not try again; finish and '
-  + 'tell the delegating agent.'
+/** Model-facing refusal of a subagent's generation where it would need the user's confirmation. */
+const SUBAGENT_REASON = 'Not run and nothing was charged. This is not the user declining: generation here needs the '
+  + 'user\'s confirmation, which a subagent cannot ask for. Do not try again. Finish without generating and tell the '
+  + 'delegating agent to generate itself.'
 
 /** Model-facing refusal of a subagent's generation for a request the delegating agent already generated itself. */
 const DUPLICATE_REASON = 'Not run and nothing was charged. This is not the user declining: the agent that delegated to you '
@@ -188,6 +171,22 @@ const UNREQUESTED_REASON = 'Not run and nothing was charged. This is not the use
   + 'notice, such as a subagent\'s report or a finished video job, not by the user, so nobody asked for a generation. Do '
   + 'not call a generation tool again or delegate one, and do not tell the user a generation was rejected. Reply to the user '
   + 'with what you have; if another generation might help, offer it and wait for the user to ask.'
+
+/** Why the agent is not offered generation in a step; shown to the model in place of the tools. */
+const WITHHELD = {
+  unrequested: 'Image and video generation is not offered in this turn: a notice, such as a subagent\'s report or a finished '
+    + 'video job, started it, not the user, so nobody asked for a generation. Reply with what you have; if another generation '
+    + 'might help, offer it and wait for the user to ask. Nothing was rejected.',
+  delegated: 'Image and video generation is not offered for the rest of this turn: a subagent you delegated to is generating '
+    + 'this request. Wait for its result and pass it on; do not generate the same request yourself.',
+  duplicate: 'Image and video generation is not offered to you: the agent that delegated to you already generated for this '
+    + 'request itself. Do not generate; report that the generation was already done.',
+  subagent: 'Image and video generation is not offered to subagents in this conversation: it needs the user\'s confirmation, '
+    + 'which a subagent cannot ask for. If your task is to generate, tell the delegating agent to generate itself.',
+} as const
+
+/** Tools the guard withholds from a step. */
+const GENERATION_TOOLS: ReadonlySet<string> = new Set([TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO])
 
 /** Whether an agent runs as a subagent another agent delegated to. */
 function isSubagent(agent: unknown): boolean {
@@ -416,17 +415,52 @@ export function apply(ctx: Context, config: Config): void {
     promptNotes,
   })
 
-  // A generation in a turn the user did not start is refused; a second one in a user's turn always asks.
+  // The agent is offered generation only where it follows from a request, and one request is generated
+  // once: by the agent or by the subagents it handed it to. A second call in a user's turn always asks.
   const turnGuard = new TurnGuard()
-  ctx.on('agent/pre-step', async (step, next) => {
-    turnGuard.enter(step.agent, step.turn, step.messages)
+  ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
+    turnGuard.claim(agent, turn, message)
     // A subagent starts inside the turn that delegated to it; that turn's request is its origin.
-    if (step.agent !== undefined && isSubagent(step.agent)) turnGuard.adopt(step.agent, rootAgent(delegatingSessions(step.agent)) as object | undefined)
+    if (isSubagent(agent)) turnGuard.adopt(agent, rootAgent(delegatingSessions(agent)) as object | undefined)
+  })
+  ctx.on('agent/pre-step', async (step, next) => {
+    turnGuard.enter(step.agent, step.turn)
     return await next()
   })
+  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const assembly = await next()
+    const agent = (context as { agent?: object }).agent
+    if (agent === undefined) return assembly
+    const subagent = isSubagent(agent)
+    const why = await withheld(agent, subagent)
+    if (why === undefined && !subagent) return assembly
+    // Prompt notes always need the user's confirmation, which a subagent cannot ask for.
+    const hidden = (name: string) => (why !== undefined && GENERATION_TOOLS.has(name)) || (subagent && name === TOOL_SET_PROMPT_NOTES)
+    return {
+      ...assembly,
+      tools: assembly.tools.filter(tool => !hidden(tool.name)),
+      sections: why === undefined ? assembly.sections : [...assembly.sections, { name: 'dsh-media-gen:withheld', text: WITHHELD[why], interpolate: false }],
+    }
+  })
+
+  /** Why an agent is not offered generation now, if it is not. */
+  async function withheld(agent: object, subagent: boolean): Promise<keyof typeof WITHHELD | undefined> {
+    if (subagent) {
+      if (turnGuard.duplicate(agent)) return 'duplicate'
+      return await subagentMayGenerate(agent) ? undefined : 'subagent'
+    }
+    const standing = turnGuard.standing(agent)
+    return standing === 'unrequested' || standing === 'delegated' ? standing : undefined
+  }
+
+  /** Whether a subagent's generation needs no confirmation: the user allowed it without asking for the conversation. */
+  async function subagentMayGenerate(agent: unknown): Promise<boolean> {
+    return !config.requireApproval.get() || await autoApproved(...delegatingSessions(agent))
+  }
 
   // The cost gate runs outermost, so a listener that allows without calling
   // next() cannot skip it; the guard below denies any generation it never saw.
+  // The refusals here back up the withheld tools for a call made anyway.
   const gated = new WeakSet<object>()
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
     const subagent = isSubagent(exec.agent)
@@ -443,14 +477,12 @@ export function apply(ctx: Context, config: Config): void {
     gated.add(exec)
     const downstream = await next()
     if (downstream.kind === 'deny' || downstream.kind === 'cancel') return downstream
-    // DSH rejects a subagent's questions without showing them, so a subagent generates only
-    // where no question is needed: bulk work the user allowed in the delegating conversation.
-    // One request is generated once: by the agent itself or by the subagents it delegated to, not both.
     if (subagent) {
       if (turnGuard.duplicate(exec.agent)) return { kind: 'deny', reason: DUPLICATE_REASON }
-      const decision = await subagentGate(exec, downstream)
-      if (decision.kind !== 'deny') turnGuard.recordDelegated(exec.agent)
-      return decision
+      // DSH rejects a subagent's questions without showing them, so it generates only where none is needed.
+      if (!await subagentMayGenerate(exec.agent) || (await outsideInputs(exec)).length > 0) return { kind: 'deny', reason: SUBAGENT_REASON }
+      turnGuard.recordDelegated(exec.agent)
+      return downstream
     }
     const standing = turnGuard.standing(exec.agent)
     if (standing === 'unrequested') return { kind: 'deny', reason: UNREQUESTED_REASON }
@@ -460,41 +492,6 @@ export function apply(ctx: Context, config: Config): void {
     if (decision.kind !== 'deny') turnGuard.record(exec.agent)
     return decision
   }, { prepend: true })
-
-  /**
-   * A subagent's generation. DSH rejects a subagent's own questions without
-   * showing them, so the question goes to the conversation that delegated to
-   * it, which can still show one while its turn is open. Where the user allowed
-   * generation without asking, bulk work goes ahead with no question.
-   */
-  async function subagentGate(
-    exec: { name: string; arguments: unknown; signal: AbortSignal; agent?: unknown }, downstream: PreToolDecision,
-  ): Promise<PreToolDecision> {
-    const outside = await outsideInputs(exec)
-    const sessions = delegatingSessions(exec.agent)
-    if (outside.length === 0 && (!config.requireApproval.get() || await autoApproved(...sessions))) return downstream
-    const ours = await costQuestion(exec, false, outside)
-    if (ours.kind !== 'ask') return ours
-    const approval = ctx.get('approval') as ApprovalLike | undefined
-    const root = rootAgent(sessions)
-    if (approval === undefined || root === undefined) return { kind: 'deny', reason: SUBAGENT_REASON }
-    const display = ours.displayReason ?? { en: ours.reason ?? '' }
-    let outcome: string
-    try {
-      outcome = await approval.request({
-        agent: root,
-        toolName: exec.name,
-        reason: `${t('en', 'approval.subagent')}\n${ours.reason ?? display.en}`,
-        displayReason: Object.fromEntries(Object.entries(display).map(([lang, text]) =>
-          [lang, `${t(lang as Parameters<typeof t>[0], 'approval.subagent')}\n${text}`])) as { en: string },
-        signal: exec.signal,
-      })
-    } catch {
-      // The delegating conversation's turn has ended, so no question can be shown there.
-      return { kind: 'deny', reason: SUBAGENT_REASON }
-    }
-    return outcome === 'allowed-once' ? downstream : { kind: 'deny', reason: SUBAGENT_DECLINED }
-  }
 
   /** The live agent of the conversation the user sees, found by walking up the delegation. */
   function rootAgent(sessions: readonly string[]): unknown {

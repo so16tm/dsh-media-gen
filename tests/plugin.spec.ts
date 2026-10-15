@@ -370,36 +370,49 @@ describe('plugin apply', () => {
     const decision = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
     expect(decision.reason).toContain('Generate a 4-second video')
   })
-  it('puts a subagent\'s generation to the user in the delegating conversation, or lets it through where allowed', async () => {
+  /** The turn-tracking listeners of an applied plugin, driven the way DSH drives them. */
+  function turns(listeners: Map<string, (...args: never[]) => unknown>) {
+    const claimed = listeners.get('agent/inbox/claimed') as unknown as (payload: unknown) => void
+    const assemble = listeners.get('system-prompt/assemble') as unknown as (
+      assembly: unknown, context: unknown, next: () => Promise<unknown>) => Promise<{ tools: { name: string }[]; sections: { name: string; text: string }[] }>
+    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
+    const signal = new AbortController().signal
+    return {
+      claim: (agent: unknown, turn: number, kind: string) => claimed({ agent, turn, message: { source: { kind } } }),
+      /** The tool names and withheld note the agent is offered in its next step. */
+      offered: async (agent: unknown) => {
+        const tools = ['media_generate_image', 'media_generate_video', 'media_set_prompt_notes', 'media_list_models'].map(name => ({ name }))
+        const assembly = await assemble({ tools, sections: [] }, { agent }, async () => ({ tools, sections: [] }))
+        return { tools: assembly.tools.map(t => t.name), note: assembly.sections.map(s => s.text).join('') }
+      },
+      call: (agent: unknown, name = 'media_generate_image', args: unknown = { prompts: ['x'] }) =>
+        hook({ name, arguments: args, signal, agent }, async () => ({ kind: 'allow' })),
+    }
+  }
+
+  it('offers subagents generation only where it needs no confirmation, and never prompt notes', async () => {
     stubNetwork()
     const parent = Object.assign(fakeAgent('p1'), { session: { id: 'p1', header: {} } })
     const { ctx, listeners, commands } = fakeContext([parent])
-    const asked: { agent: unknown; displayReason: Record<string, string> }[] = []
-    let answer: string | Error = 'allowed-once'
-    ;(ctx as unknown as { get(name: string): unknown }).get = ((get) => (name: string) => name === 'approval'
-      ? { request: async (req: (typeof asked)[number]) => { asked.push(req); if (answer instanceof Error) throw answer; return answer } }
-      : get(name))(ctx.get)
     apply(ctx as never, Config({ defaultImageModel: 'g/img' }) as never)
-    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
-    const signal = new AbortController().signal
+    const { claim, offered, call } = turns(listeners)
     const child = { session: { id: 'c1', header: { origin: 'subagent', parentSession: 'p1' } } }
-    const call = (name: string, args: unknown) => hook({ name, arguments: args, signal, agent: child }, async () => ({ kind: 'allow' }))
-    expect((await call('media_generate_image', { prompts: ['x'] })).kind).toBe('allow')
-    expect(asked[0]?.agent).toBe(parent)
-    expect(asked[0]?.displayReason.ja).toContain('サブエージェントからの生成です')
-    expect(asked[0]?.displayReason.ja).toContain('概算料金')
-    answer = 'rejected'
-    expect(await call('media_generate_image', { prompts: ['x'] })).toMatchObject({ kind: 'deny', reason: expect.stringContaining('declined') })
-    answer = new Error('outside an open turn')
-    expect(await call('media_generate_image', { prompts: ['x'] })).toMatchObject({ kind: 'deny', reason: expect.stringContaining('could not be shown') })
-    expect((await call('media_set_prompt_notes', { model: 'g/img', notes: 'x' })).kind).toBe('deny')
-    expect(await call('media_list_models', {})).toEqual({ kind: 'allow' })
-    // Bulk work in a conversation that allows generation: no question at all.
-    asked.length = 0
-    await commands.find(c => c.name === 'media-approval')!.handler!({ agent: parent, rawInput: 'on', signal })
-    expect((await call('media_generate_image', { prompts: ['x'] })).kind).toBe('allow')
-    expect((await call('media_generate_image', { prompts: ['y'] })).kind).toBe('allow')
-    expect(asked).toHaveLength(0)
+    claim(parent, 1, 'user')
+    claim(child, 1, 'user')
+    // Confirmation is on and a subagent cannot ask, so it is not offered generation at all.
+    const asking = await offered(child)
+    expect(asking.tools).toEqual(['media_list_models'])
+    expect(asking.note).toContain('not offered to subagents')
+    expect((await offered(parent)).tools).toContain('media_generate_image')
+    expect(await call(child)).toMatchObject({ kind: 'deny', reason: expect.stringContaining('not the user declining') })
+    expect((await call(child, 'media_set_prompt_notes', { model: 'g/img', notes: 'x' })).kind).toBe('deny')
+    // Bulk work in a conversation that allows generation without asking: every call goes ahead.
+    await commands.find(c => c.name === 'media-approval')!.handler!({ agent: parent, rawInput: 'on', signal: new AbortController().signal })
+    const allowed = await offered(child)
+    expect(allowed.tools).toEqual(['media_generate_image', 'media_generate_video', 'media_list_models'])
+    expect(allowed.note).toBe('')
+    expect((await call(child)).kind).toBe('allow')
+    expect((await call(child, 'media_generate_image', { prompts: ['y'] })).kind).toBe('allow')
   })
 
   it('generates one request once: by the delegating agent or by its subagents, not both', async () => {
@@ -407,59 +420,62 @@ describe('plugin apply', () => {
     const parent = Object.assign(fakeAgent('p1'), { session: { id: 'p1', header: {} } })
     const { ctx, listeners } = fakeContext([parent])
     apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
-    const step = listeners.get('agent/pre-step') as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>
-    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
-    const signal = new AbortController().signal
+    const { claim, offered, call } = turns(listeners)
     const child = (id: string) => ({ session: { id, header: { origin: 'subagent', parentSession: 'p1' } } })
-    const call = (agent: unknown, prompt = 'x') => hook({ name: 'media_generate_image', arguments: { prompts: [prompt] }, signal, agent }, async () => ({ kind: 'allow' }))
-    const start = (agent: unknown) => step({ agent, turn: 1, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
-    // The agent generated the request itself, then handed it to a subagent as well: the subagent does not generate it again.
-    await step({ agent: parent, turn: 1, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
+    // The agent generated the request itself, then handed it to a subagent as well: the subagent is not offered it.
+    claim(parent, 1, 'user')
     expect((await call(parent)).kind).toBe('allow')
     const late = child('c1')
-    await start(late)
-    const duplicate = await call(late)
-    expect(duplicate.kind).toBe('deny')
-    expect(duplicate.reason).toContain('not the user declining')
-    expect(duplicate.reason).toContain('already generated')
-    // A request handed to subagents: every subagent generates its share, and the agent does not generate it too.
-    await step({ agent: parent, turn: 2, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
+    claim(late, 1, 'user')
+    const duplicate = await offered(late)
+    expect(duplicate.tools).not.toContain('media_generate_image')
+    expect(duplicate.note).toContain('already generated')
+    expect(await call(late)).toMatchObject({ kind: 'deny', reason: expect.stringContaining('not the user declining') })
+    // A request handed to subagents: every subagent generates its share, and the agent is not offered it too.
+    claim(parent, 2, 'user')
     const first = child('c2')
     const second = child('c3')
-    await start(first)
-    await start(second)
-    expect((await call(first, 'a')).kind).toBe('allow')
-    expect((await call(second, 'b')).kind).toBe('allow')
-    expect((await call(first, 'c')).kind).toBe('allow')
-    const twice = await call(parent)
-    expect(twice.kind).toBe('deny')
-    expect(twice.reason).toContain('already generating')
+    claim(first, 1, 'user')
+    claim(second, 1, 'user')
+    expect((await call(first, 'media_generate_image', { prompts: ['a'] })).kind).toBe('allow')
+    expect((await call(second, 'media_generate_image', { prompts: ['b'] })).kind).toBe('allow')
+    expect((await call(first, 'media_generate_image', { prompts: ['c'] })).kind).toBe('allow')
+    const delegated = await offered(parent)
+    expect(delegated.tools).not.toContain('media_generate_image')
+    expect(delegated.note).toContain('a subagent you delegated to is generating')
+    expect((await call(parent)).reason).toContain('already generating')
     // The subagents' reports start a turn nobody asked a generation in.
-    await step({ agent: parent, turn: 3, messages: [{ source: { kind: 'subagent-settled' } }] }, async () => ({}))
-    expect((await call(parent)).reason).toContain('started by a notice')
+    claim(parent, 3, 'subagent-settled')
+    expect((await offered(parent)).tools).not.toContain('media_generate_image')
     // The user's next request is a new one.
-    await step({ agent: parent, turn: 4, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
+    claim(parent, 4, 'user')
+    expect((await offered(parent)).tools).toContain('media_generate_image')
     expect((await call(parent)).kind).toBe('allow')
   })
 
-  it('refuses a generation in a turn a notice started, and asks for a second one in the user\'s turn', async () => {
+  it('offers no generation in a turn a notice started, and asks for a second one in the user\'s turn', async () => {
     stubNetwork()
     const { ctx, listeners } = fakeContext()
     apply(ctx as never, Config({ requireApproval: false, defaultImageModel: 'g/img' }) as never)
+    const { claim, offered, call } = turns(listeners)
     const step = listeners.get('agent/pre-step') as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>
-    const hook = listeners.get('tools/pre-execute') as unknown as (exec: unknown, next: () => Promise<unknown>) => Promise<{ kind: string; reason?: string }>
-    const signal = new AbortController().signal
     const agent = { session: { id: 's1', header: {} } }
-    const call = () => hook({ name: 'media_generate_image', arguments: { prompts: ['x'] }, signal, agent }, async () => ({ kind: 'allow' }))
-    await step({ agent, turn: 1, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
-    expect((await call()).kind).toBe('allow')
+    claim(agent, 1, 'user')
+    expect((await call(agent)).kind).toBe('allow')
     await step({ agent, turn: 1, messages: [] }, async () => ({}))
-    expect((await call()).kind).toBe('ask')
-    await step({ agent, turn: 2, messages: [{ source: { kind: 'agent-message' } }] }, async () => ({}))
-    const unrequested = await call()
+    expect((await call(agent)).kind).toBe('ask')
+    claim(agent, 2, 'agent-message')
+    const notice = await offered(agent)
+    expect(notice.tools).toEqual(['media_set_prompt_notes', 'media_list_models'])
+    expect(notice.note).toContain('Nothing was rejected')
+    const unrequested = await call(agent)
     expect(unrequested.kind).toBe('deny')
     expect(unrequested.reason).toContain('started by a notice')
-    await step({ agent, turn: 3, messages: [{ source: { kind: 'user' } }] }, async () => ({}))
-    expect((await call()).kind).toBe('allow')
+    claim(agent, 3, 'user')
+    expect((await offered(agent)).note).toBe('')
+    expect((await call(agent)).kind).toBe('allow')
+    // A turn that took nothing from the inbox (its messages came from a listener) counts as requested.
+    await step({ agent, turn: 4, messages: [{ source: { kind: 'goal' } }] }, async () => ({}))
+    expect((await call(agent)).kind).toBe('allow')
   })
 })
