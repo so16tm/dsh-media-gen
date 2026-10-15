@@ -144,6 +144,14 @@ const STORAGE_WAIT_MS = 10_000
 /** Prompt excerpt length shown in the approval prompt; the agent writes the prompt, so most of it is shown. */
 const PROMPT_PREVIEW = 1500
 
+/** Tools that need the user's confirmation, which a subagent cannot ask for, unless generation is allowed without asking. */
+const GENERATION_TOOLS: ReadonlySet<string> = new Set([TOOL_GENERATE_IMAGE, TOOL_GENERATE_VIDEO])
+
+/** Whether an agent runs as a subagent another agent delegated to. */
+function isSubagent(agent: unknown): boolean {
+  return (agent as { session?: { header?: { origin?: unknown } } } | undefined)?.session?.header?.origin === 'subagent'
+}
+
 /** Errors that mean the plugin refuses the request itself, before any charge. */
 const REJECTED_REQUEST: ReadonlySet<MediaErrorCode> = new Set([
   'NO_PROVIDER', 'PROVIDER_NOT_FOUND', 'NO_MODEL', 'UNSUPPORTED_MODEL', 'UNSUPPORTED_PARAMETER', 'INVALID_REQUEST', 'LIMIT_EXCEEDED',
@@ -353,6 +361,21 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('agent/pre-step', async (step, next) => {
     turnGuard.enter(step.agent, step.turn)
     return await next()
+  })
+
+  // DSH rejects a subagent's approval questions without showing them, so a subagent offered a tool
+  // that would ask could only try it and be rejected. It is offered generation only where no question
+  // is needed, and never prompt notes, which always ask.
+  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const assembly = await next()
+    const agent = (context as { agent?: { session?: { id?: unknown } } }).agent
+    if (!isSubagent(agent)) return assembly
+    const id = agent?.session?.id
+    const free = !config.requireApproval.get() || await autoApproved(typeof id === 'string' ? id : undefined)
+    return {
+      ...assembly,
+      tools: assembly.tools.filter(tool => tool.name !== TOOL_SET_PROMPT_NOTES && (free || !GENERATION_TOOLS.has(tool.name))),
+    }
   })
 
   // The cost gate runs outermost, so a listener that allows without calling
