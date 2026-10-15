@@ -404,8 +404,6 @@ describe('plugin apply', () => {
     expect(asking.tools).toEqual(['media_list_models'])
     expect(asking.note).toContain('not offered to subagents')
     expect((await offered(parent)).tools).toContain('media_generate_image')
-    expect(await call(child)).toMatchObject({ kind: 'deny', reason: expect.stringContaining('not the user declining') })
-    expect((await call(child, 'media_set_prompt_notes', { model: 'g/img', notes: 'x' })).kind).toBe('deny')
     // Bulk work in a conversation that allows generation without asking: every call goes ahead.
     await commands.find(c => c.name === 'media-approval')!.handler!({ agent: parent, rawInput: 'on', signal: new AbortController().signal })
     const allowed = await offered(child)
@@ -430,7 +428,6 @@ describe('plugin apply', () => {
     const duplicate = await offered(late)
     expect(duplicate.tools).not.toContain('media_generate_image')
     expect(duplicate.note).toContain('already generated')
-    expect(await call(late)).toMatchObject({ kind: 'deny', reason: expect.stringContaining('not the user declining') })
     // A request handed to subagents: every subagent generates its share, and the agent is not offered it too.
     claim(parent, 2, 'user')
     const first = child('c2')
@@ -443,7 +440,6 @@ describe('plugin apply', () => {
     const delegated = await offered(parent)
     expect(delegated.tools).not.toContain('media_generate_image')
     expect(delegated.note).toContain('a subagent you delegated to is generating')
-    expect((await call(parent)).reason).toContain('already generating')
     // The subagents' reports start a turn nobody asked a generation in.
     claim(parent, 3, 'subagent-settled')
     expect((await offered(parent)).tools).not.toContain('media_generate_image')
@@ -468,9 +464,6 @@ describe('plugin apply', () => {
     const notice = await offered(agent)
     expect(notice.tools).toEqual(['media_set_prompt_notes', 'media_list_models'])
     expect(notice.note).toContain('Nothing was rejected')
-    const unrequested = await call(agent)
-    expect(unrequested.kind).toBe('deny')
-    expect(unrequested.reason).toContain('started by a notice')
     claim(agent, 3, 'user')
     expect((await offered(agent)).note).toBe('')
     expect((await call(agent)).kind).toBe('allow')

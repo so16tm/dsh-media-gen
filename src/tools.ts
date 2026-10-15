@@ -42,8 +42,9 @@ const ONCE_GUIDE = 'Make only the generations the user asked for, in one call: p
   + 'so three images means three prompts, each describing one image only. '
   + 'Once you have what you need, call the tool in the same turn instead of announcing it and stopping. Never make more than asked. Once '
   + 'those return, do not call again on your own to retry, improve, fix, or vary the results, even if they miss the request: '
-  + 'show them, say what differs, and let the user decide. Generate a request yourself or hand it to subagents, never '
-  + 'both. Subagents can generate only where the user allowed generation without asking; otherwise generate yourself. A '
+  + 'show them, say what differs, and let the user decide. Generate what the user asks for yourself, with this tool. Hand '
+  + 'generation to subagents only for bulk work where the user allowed generation without asking, and then never generate the '
+  + 'same request yourself as well. A '
   + 'notice that arrives afterwards, such as a subagent\'s report, is not a request to generate.'
 
 const ASK_GUIDE = 'Ask only when the request leaves out something essential that you cannot reasonably choose (%s), '
