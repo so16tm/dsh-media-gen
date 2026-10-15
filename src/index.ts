@@ -163,19 +163,31 @@ const SUBAGENT_NOTES_REASON = 'Prompt notes cannot be saved from a subagent: sav
   + 'subagent cannot get. Tell the delegating agent what to save instead.'
 
 /** Model-facing refusal of a subagent's generation when no question could reach the user. */
-const SUBAGENT_REASON = 'Not run and nothing was charged: generation here needs the user\'s approval, and the question could '
-  + 'not be shown because the delegating conversation is not in a turn. Do not try again. Finish without generating and tell '
-  + 'the delegating agent; the user can allow generation in the conversation ("Allow in this conversation" in the chat '
-  + 'input\'s Media menu, or /media-approval on) for bulk work in subagents.'
+const SUBAGENT_REASON = 'Not run and nothing was charged. This is not the user declining: generation needs the user\'s '
+  + 'approval, and the question could not be shown because the delegating conversation is no longer in a turn. Do not try '
+  + 'again. Finish without generating and tell the delegating agent that the question could not be shown; the user can '
+  + 'allow generation in the conversation ("Allow in this conversation" in the chat input\'s Media menu, or /media-approval on) '
+  + 'for bulk work in subagents.'
 
 /** Model-facing refusal of a subagent's generation the user declined. */
 const SUBAGENT_DECLINED = 'Not run and nothing was charged: the user declined this generation. Do not try again; finish and '
   + 'tell the delegating agent.'
 
+/** Model-facing refusal of a subagent's generation for a request the delegating agent already generated itself. */
+const DUPLICATE_REASON = 'Not run and nothing was charged. This is not the user declining: the agent that delegated to you '
+  + 'already generated for this request itself, so generating here would do it twice. Do not try again. Finish without '
+  + 'generating and report only that the generation was already done by the delegating agent.'
+
+/** Model-facing refusal of a generation whose request a subagent already generates. */
+const DELEGATED_REASON = 'Not run and nothing was charged. This is not the user declining: a subagent you delegated to in '
+  + 'this turn is already generating for this request, so generating here would do it twice. Do not call a generation tool '
+  + 'again in this turn. Wait for the subagent\'s result and pass it on to the user.'
+
 /** Model-facing refusal of a generation in a turn the user did not start. */
-const UNREQUESTED_REASON = 'Not run and nothing was charged: this turn was started by a notice, such as a subagent\'s report '
-  + 'or a finished video job, not by the user, so nobody asked for a generation. Do not call a generation tool again or '
-  + 'delegate one. Reply to the user with what you have; if another generation might help, offer it and wait for the user to ask.'
+const UNREQUESTED_REASON = 'Not run and nothing was charged. This is not the user declining: this turn was started by a '
+  + 'notice, such as a subagent\'s report or a finished video job, not by the user, so nobody asked for a generation. Do '
+  + 'not call a generation tool again or delegate one, and do not tell the user a generation was rejected. Reply to the user '
+  + 'with what you have; if another generation might help, offer it and wait for the user to ask.'
 
 /** Whether an agent runs as a subagent another agent delegated to. */
 function isSubagent(agent: unknown): boolean {
@@ -408,6 +420,8 @@ export function apply(ctx: Context, config: Config): void {
   const turnGuard = new TurnGuard()
   ctx.on('agent/pre-step', async (step, next) => {
     turnGuard.enter(step.agent, step.turn, step.messages)
+    // A subagent starts inside the turn that delegated to it; that turn's request is its origin.
+    if (step.agent !== undefined && isSubagent(step.agent)) turnGuard.adopt(step.agent, rootAgent(delegatingSessions(step.agent)) as object | undefined)
     return await next()
   })
 
@@ -431,9 +445,16 @@ export function apply(ctx: Context, config: Config): void {
     if (downstream.kind === 'deny' || downstream.kind === 'cancel') return downstream
     // DSH rejects a subagent's questions without showing them, so a subagent generates only
     // where no question is needed: bulk work the user allowed in the delegating conversation.
-    if (subagent) return await subagentGate(exec, downstream)
+    // One request is generated once: by the agent itself or by the subagents it delegated to, not both.
+    if (subagent) {
+      if (turnGuard.duplicate(exec.agent)) return { kind: 'deny', reason: DUPLICATE_REASON }
+      const decision = await subagentGate(exec, downstream)
+      if (decision.kind !== 'deny') turnGuard.recordDelegated(exec.agent)
+      return decision
+    }
     const standing = turnGuard.standing(exec.agent)
     if (standing === 'unrequested') return { kind: 'deny', reason: UNREQUESTED_REASON }
+    if (standing === 'delegated') return { kind: 'deny', reason: DELEGATED_REASON }
     const decision = await costGate(exec, downstream, standing === 'repeat')
     // A call refused before it ran can be corrected; one that ran or was put to the user counts.
     if (decision.kind !== 'deny') turnGuard.record(exec.agent)

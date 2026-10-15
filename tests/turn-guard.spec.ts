@@ -39,4 +39,26 @@ describe('TurnGuard', () => {
     guard.enter(agent, 2, [{ source: { kind: 'schedule' } }])
     expect(guard.standing(agent)).toBe('first')
   })
+
+  it('ties a subagent to the turn that delegated to it, so the request is generated once', () => {
+    const guard = new TurnGuard()
+    const root = {}
+    const child = {}
+    guard.enter(root, 1, [user])
+    guard.adopt(child, root)
+    expect(guard.duplicate(child)).toBe(false)
+    guard.recordDelegated(child)
+    expect(guard.standing(root)).toBe('delegated')
+    guard.enter(root, 2, [user])
+    expect(guard.standing(root)).toBe('first')
+    // Adopted once: a later turn of the root does not move the subagent's origin.
+    guard.adopt(child, root)
+    guard.record(root)
+    expect(guard.duplicate(child)).toBe(false)
+    const late = {}
+    guard.adopt(late, root)
+    expect(guard.duplicate(late)).toBe(true)
+    expect(guard.duplicate(undefined)).toBe(false)
+    guard.adopt({}, undefined)
+  })
 })

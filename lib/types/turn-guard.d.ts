@@ -16,14 +16,33 @@ export interface StepMessage {
     } | undefined;
 }
 /** How a generation call relates to the current turn. */
-export type TurnStanding = 'unknown' | 'unrequested' | 'first' | 'repeat';
+export type TurnStanding = 'unknown' | 'unrequested' | 'delegated' | 'first' | 'repeat';
 /** Per-agent turn tracking; agents are held weakly. */
 export declare class TurnGuard {
     private readonly states;
+    /** Turns in which an agent generated itself. */
+    private readonly generatedTurns;
+    /** Turns whose request an agent's subagents generate. */
+    private readonly delegatedTurns;
+    private readonly origins;
     /** Record the messages that enter one step of an agent's turn. */
     enter(agent: object | undefined, turn: number, messages: readonly StepMessage[]): void;
-    /** How a generation call now relates to the agent's turn; an agent never seen is unknown. */
+    /**
+     * How a generation call now relates to the agent's turn; an agent never
+     * seen is unknown. A turn whose request a subagent already generates is
+     * delegated: the agent does not generate it a second time itself.
+     */
     standing(agent: object | undefined): TurnStanding;
     /** Record a generation call that went ahead or was put to the user. */
     record(agent: object | undefined): void;
+    /**
+     * Remember, once, the conversation's agent and its current turn as the
+     * origin of a subagent's work. Called when the subagent starts, which is
+     * inside the turn that delegated to it.
+     */
+    adopt(child: object, root: object | undefined): void;
+    /** Whether the agent that delegated to this subagent already generated the same request itself. */
+    duplicate(child: object | undefined): boolean;
+    /** Record that a subagent generates the request of the turn that delegated to it. */
+    recordDelegated(child: object | undefined): void;
 }
