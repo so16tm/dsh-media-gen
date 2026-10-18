@@ -118,3 +118,16 @@
 
 - `workingDirectory` サービス（`@deepseek-ai/dsh-working-directory`）は `0.2.0-rc.2` に存在しない。`present` ツールは `exec.agent.session.header.cwd` から作業ディレクトリを得ている（`packages/deliverables/tool-present/src/index.ts`）。本プラグインは、サービスがあればそれを使い、なければセッションヘッダーの `cwd`、それもなければ Host プロセスの作業ディレクトリを使う。
 - `llm.listConfigurableProviders()`、`settings.describe()`、`credentials.resolve()`、`attachments.saveImage()`、`tools/pre-execute` の `displayReason`、`llm-pi-ai` のプロファイル形式は `0.2.0-rc.2` でも同じだった。
+
+## 11. 0.2.1-rc.2 との差分（2026-10-18）
+
+DSH の最新版 `0.2.1-rc.2` に対し、本プラグインが使う API を `dsh-v0.2.0-rc.2` と `dsh-v0.2.1-rc.2` のタグの差分で確かめた。壊れる変更はなく、コードの修正は要らなかった。peer の範囲 `>=0.2.0-rc.2 <0.3.0` は、DSH が `includePrerelease: true` で照合するため `0.2.1-rc.2` を含む（`packages/boot/app-boot/src/plugin-compatibility.ts`）。
+
+- `workingDirectory` サービスが既定で入るようになった（`packages/bundle/base/cordis.patch.yml`）。本プラグインは §10 のとおりサービスを優先するので、`cd` 後の作業ディレクトリに保存する。
+- 資格情報は、保存した値が環境変数より優先されるようになった。本プラグインも `credentials.resolve()` を通すので DSH と同じ値を使う。
+- Connection の fetch ルートは所有者だけが使えるようになった。ブラウザーは所有者なので、本プラグインの `/api/media-gen.*` はそのまま使える。
+- `tool.call.toolview` のスロットから `hookContext` / `inject` がなくなり、入力欄の下書きにコマンドのチップが入った。本プラグインはどちらも使っていない。
+- `listConfigurableProviders()` に `defaultBaseURL` などの任意項目が増えた（OpenRouter は `https://openrouter.ai/api/v1`）。本プラグインは今の定数で足りるので使っていない。
+- 動画は今も attachment の対象外。
+
+クラウドで `@deepseek-ai/dsh@0.2.1-rc.2` の web プロファイルに `main`（`f1caca6`）を `dsh plugin --profile web add git+https://...` で入れ、模擬 OpenRouter で次を確かめた：エージェントからの画像生成（承認カード・保存・表示・料金）、動画ジョブの登録・完了の保存とセッションへの通知、`/image`（`--yes` なしの見積もりと生成）、生成カードからの生成、「チャットに使う」、設定画面の表示と保存。
