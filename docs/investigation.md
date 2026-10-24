@@ -131,3 +131,13 @@ DSH の最新版 `0.2.1-rc.2` に対し、本プラグインが使う API を `d
 - 動画は今も attachment の対象外。
 
 クラウドで `@deepseek-ai/dsh@0.2.1-rc.2` の web プロファイルに `main`（`f1caca6`）を `dsh plugin --profile web add git+https://...` で入れ、模擬 OpenRouter で次を確かめた：エージェントからの画像生成（承認カード・保存・表示・料金）、動画ジョブの登録・完了の保存とセッションへの通知、`/image`（`--yes` なしの見積もりと生成）、生成カードからの生成、「チャットに使う」、設定画面の表示と保存。
+
+## 12. 0.2.1-rc.3 との差分（2026-10-24）
+
+DSH の最新版 `0.2.1-rc.3`（npm の `next`）に対し、`dsh-v0.2.1-rc.2` と `dsh-v0.2.1-rc.3` のタグの差分で、本プラグインが使う API を確かめた。壊れる変更はなく、コードの修正は要らなかった。
+
+- 差分は、ナビゲーションの項目をピン留め・解除できる「More」メニュー（`sidebar.panellist.actions`、`sidebar.right.tab.guide.actions` の追加と `entry-customization` プラグインの同梱）、DeepSeek の API キー経路が公式の `/models` 一覧に従う変更、ツールチップの見た目の修正が中心。
+- 本プラグインが使うサービス（`llm`・`settings`・`credentials`・`attachment`・`tools`）と、スロット（`sidebar.right.tab.document`・`plugins.row.config`・`tool.call.toolview`・`conversation.chat.commandview`・`conversation.chat.turnTail`・`conversation.input.left`）の定義に変更はない。追加された 2 つのスロットは `list` 型で、既存の登録に影響しない。
+- 動画は今も attachment の対象外。
+
+クラウドで `@deepseek-ai/dsh@0.2.1-rc.3` の web プロファイルに、`git+https://github.com/so16tm/dsh-media-gen.git#228b5d1`（開発用の依存を rc.3 に上げた版）を `dsh plugin --profile web add` で入れ、模擬 OpenRouter（`mock.openrouter.ai` を `/etc/hosts` で一時的にローカルへ向けた。確認後に戻した）で次を確かめた：プラグインの読み込みとツール 6 個の登録、エージェントからの画像生成（承認カード・保存・サムネイル・料金 0.04 USD・「画像生成に使う」などのボタン）、動画ジョブの登録・完了の保存・セッションへの通知、設定画面の表示と保存（既定の画像モデルが `cordis.patch.yml` に書かれる）、チャット欄の「Media」メニュー、`/image`（`--yes` なしの見積もりと、`--yes` ありの生成）。
