@@ -1,4 +1,4 @@
 allowBuilds:
   esbuild: false
 overrides:
-  "@deepseek-ai/schemastery": "3.18.4"
+  "@deepseek-ai/schemastery": "3.19.0"

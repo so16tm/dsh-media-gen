@@ -56,11 +56,11 @@
   },
   "dependencies": {
     "@cwasm/webp": "~0.1.5",
-    "@deepseek-ai/schemastery": "~3.18.4",
+    "@deepseek-ai/schemastery": "~3.19.0",
     "omggif": "~1.0.10"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/cordis": ">=4.0.4 <4.2.0",
     "@deepseek-ai/dsh-attachment": ">=0.2.0-rc.2 <0.3.0",
     "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.2 <0.3.0",
     "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
@@ -68,12 +68,12 @@
     "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/dsh-attachment": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-settings": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
     "@types/node": "^22.10.0",
     "@types/omggif": "^1.0.5",
     "@types/react": "~18.3.31",

@@ -141,3 +141,14 @@ DSH の最新版 `0.2.1-rc.3`（npm の `next`）に対し、`dsh-v0.2.1-rc.2` �
 - 動画は今も attachment の対象外。
 
 クラウドで `@deepseek-ai/dsh@0.2.1-rc.3` の web プロファイルに、`git+https://github.com/so16tm/dsh-media-gen.git#228b5d1`（開発用の依存を rc.3 に上げた版）を `dsh plugin --profile web add` で入れ、模擬 OpenRouter（`mock.openrouter.ai` を `/etc/hosts` で一時的にローカルへ向けた。確認後に戻した）で次を確かめた：プラグインの読み込みとツール 6 個の登録、エージェントからの画像生成（承認カード・保存・サムネイル・料金 0.04 USD・「画像生成に使う」などのボタン）、動画ジョブの登録・完了の保存・セッションへの通知、設定画面の表示と保存（既定の画像モデルが `cordis.patch.yml` に書かれる）、チャット欄の「Media」メニュー、`/image`（`--yes` なしの見積もりと、`--yes` ありの生成）。
+
+## 13. 0.2.2-rc.1 との差分（2026-11-11）
+
+DSH の最新版 `0.2.2-rc.1`（npm の `latest` / `next`）に対し、`dsh-v0.2.1-rc.3` からの差分と、npm の公開物（型定義と実行時の挙動）で、本プラグインが使う API を確かめた。コードの修正は要らなかった。
+
+- 型：開発用の依存を `0.2.2-rc.1` に上げて `pnpm typecheck`（ホスト側とブラウザ側）が通る。`pnpm build` で `lib/` に差分が出ない。テスト 115 件が通る。
+- 依存の更新：DSH は cordis `4.1.0`、schemastery `3.19.0` を使う（schemastery は `vendor/schemastery` の版表記が上がっただけでコード差分なし）。peer の cordis（`~4.0.4`）が DSH の `4.1.0` を含まないため、`>=4.0.4 <4.2.0` に広げた。DSH の互換判定（`packages/boot/app-boot/src/plugin-compatibility.ts`）は `@deepseek-ai/dsh` と `@deepseek-ai/dsh-*` の peer だけを見るので、cordis の peer は起動を止めない。`dsh-*` の peer（`>=0.2.0-rc.2 <0.3.0`）は `0.2.2-rc.1` を含む。
+- 使うサービス・イベントは型定義に残っている：`llm`（`llm/adapters-updated`）、`settings`、`credentials`、`attachment`、`tools`（`tools/pre-execute`、`tools.guard`、`defineTool`）、`agent/pre-step`。`dsh-tools` の内部は大きく組み替えられた（`pipeline.ts`・`batch.ts`・`executor.ts` などに分割、`ptc` 系を削除）が、本プラグインが使う公開 API の形は変わっていない。
+- 動画は今も attachment の対象外。
+- 動作確認：クラウドで `@deepseek-ai/dsh@0.2.2-rc.1` の web プロファイルに、この変更を含む作業ツリーを `dsh plugin --profile web add file:<dir>` で入れ、模擬 OpenRouter（`mock.openrouter.ai` を `/etc/hosts` で一時的にローカルへ向け、DSH の設定画面で OpenRouter の Base URL に指定した。確認後に戻した）で次を確かめた：プラグインの読み込みと画像・動画モデルの取得、エージェントからの画像生成（承認カード・保存・サムネイル・料金 0.04 USD・「画像生成に使う」などのボタン）、動画ジョブの登録・完了の保存・セッションへの通知（通知で始まったターンでの再生成は、承認カードが出る）、`/image`（`--model` 指定の生成）、チャット欄の「Media」メニュー、設定画面の表示と保存（既定の画像モデルが `cordis.patch.yml` に書かれる）。
+- `0.2.2-rc.2` はタグ（`dsh-v0.2.2-rc.2`、2026-11-11）だけで、npm には未公開（確認時点）。公開されたら同じ手順で確かめる。
