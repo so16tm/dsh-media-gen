@@ -370,4 +370,22 @@ describe('plugin apply', () => {
     const decision = await hook({ name: 'media_generate_video', arguments: { prompt: 'a wave' }, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
     expect(decision.reason).toContain('Generate a 4-second video')
   })
+
+  it('offers a subagent only the tools it can use without asking the user', async () => {
+    stubNetwork()
+    const offered = async (requireApproval: boolean, agent: unknown) => {
+      const { ctx, listeners } = fakeContext()
+      apply(ctx as never, Config({ requireApproval, defaultImageModel: 'g/img' }) as never)
+      const assemble = listeners.get('system-prompt/assemble') as unknown as (
+        assembly: unknown, context: unknown, next: () => Promise<unknown>) => Promise<{ tools: { name: string }[] }>
+      const tools = ['media_generate_image', 'media_generate_video', 'media_set_prompt_notes', 'media_list_models'].map(name => ({ name }))
+      return (await assemble({ tools }, { agent }, async () => ({ tools }))).tools.map(t => t.name)
+    }
+    const child = { session: { id: 'c1', header: { origin: 'subagent', parentSession: 'p1' } } }
+    const agent = { session: { id: 's1', header: {} } }
+    expect(await offered(true, child)).toEqual(['media_list_models'])
+    expect(await offered(false, child)).toEqual(['media_generate_image', 'media_generate_video', 'media_list_models'])
+    expect(await offered(true, agent)).toEqual(['media_generate_image', 'media_generate_video', 'media_set_prompt_notes', 'media_list_models'])
+    expect(await offered(true, undefined)).toHaveLength(4)
+  })
 })

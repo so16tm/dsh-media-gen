@@ -84,7 +84,7 @@ Use `video` instead of `image` for video model selection. Chat-input selectors d
 
 Generation costs money. With `requireApproval` enabled and no conversation permission, agent requests ask for approval with the actual prompt and estimated cost; direct commands show only an estimate unless you add `--yes`. The chat input's **Media → Ask before generating** menu also controls conversation permission; only the user can change it.
 
-Agent tools always ask before sending images outside the working directory or making a second generation call in the same turn, even if normal confirmation is disabled. Direct commands follow `requireApproval`, `--yes`, and conversation permission instead; these extra agent checks do not apply to them.
+Agent tools always ask before sending images outside the working directory or making a second generation call in the same turn, even if normal confirmation is disabled. DSH rejects a subagent's confirmation requests without showing them, so subagents are offered the generation tools only when `requireApproval` is off, and never prompt notes. Direct commands follow `requireApproval`, `--yes`, and conversation permission instead; these extra agent checks do not apply to them.
 
 Estimates may be unknown or lower than the actual bill, especially for input-image or token charges. Required agent approvals still ask when an estimate cannot be obtained. After a timeout or unusable response, the provider may already have charged: check before retrying. If part of a multi-image request fails, already saved images are returned with the failure.
 
